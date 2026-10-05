@@ -892,7 +892,7 @@ void MenuBrowseImageFile(char drive, bool arc, bool boot, bool multiple, const s
 					chdir( Temp_CurrentDir );
 					return;
 				}
-#if defined(MACOSX)
+#if defined(MACOSX) || defined(LINUX)
 				auto MSGX = MSG_GetUTF8;
 #else
 				auto MSGX = MSG_Get;
@@ -912,7 +912,7 @@ void MenuBrowseImageFile(char drive, bool arc, bool boot, bool multiple, const s
 							GetNewStr(lTheOpenFileName).c_str(), readonly.c_str());
 				}
 				std::string title = MSGX("INFORMATION");
-#if defined(MACOSX)
+#if defined(MACOSX) || defined(LINUX)
 				tinyfd_messageBox(title.c_str(), drive_warn.c_str(), "ok", "info", 1);
 #else
 				systemmessagebox(title.c_str(), drive_warn.c_str(), "ok", "info", 1);
@@ -2041,7 +2041,7 @@ extern uint16_t boot_code_image_stack_sp;
  */
 class BOOT : public Program {
 public:
-    BOOT() {
+    BOOT(const unsigned int fl=0) : Program(fl) {
         for (size_t i=0;i < MAX_SWAPPABLE_DISKS;i++) newDiskSwap[i] = NULL;
     }
     virtual ~BOOT() {
@@ -2164,6 +2164,8 @@ public:
         bool convertro = false;
         bool zeromem = false;
         bool force = false;
+        bool auto_floppy = false;
+        bool auto_cdrom = false;
         int loadseg_user = -1;
         int convimg = -1;
         int quiet = 0;
@@ -2228,6 +2230,16 @@ public:
         cmd->FindString("-load-seg",tmp,true);
         if (!tmp.empty())
             loadseg_user = strtoul(tmp.c_str(),NULL,0);
+
+        if(cmd->FindExist("-auto-floppy", true))
+            // Mount an empty floppy image if no floppy is mounted to enable mounting
+            // floppy images after booting a guest OS.
+            auto_floppy = true; 
+
+        if(cmd->FindExist("-auto-cdrom", true))
+            // Mount an empty CD-ROM image if no CD-ROM is mounted to enable mounting
+            // CD-ROM images after booting a guest OS.
+            auto_cdrom = true;
 
         cmd->FindString("-boothax",boothax_str,true);
 
@@ -3258,8 +3270,73 @@ public:
                 }
             }
 
-            if(!Drives[0]) runImgmount("0 empty");
-            if(!Drives[1]) runImgmount("1 empty");
+            /* If no floppy images are mounted on Drives A & B, mount an empty one. (requires -auto-floppy option) */
+            if(auto_floppy) {
+                if(!Drives[0]) runImgmount("0 empty");
+                if(!Drives[1]) runImgmount("1 empty");
+            }
+
+            /* If no mounted CD-ROM drives are found, mount an empty CD-ROM drive to a non-occupied slot (requires -auto-cdrom option) */
+            if(auto_cdrom) {
+                int8_t ide_index = -1;
+                bool ide_slave = false;
+
+                /* Parse IDE Controllers for CDROM */
+                bool isIDEControllerPresent(int8_t idx);
+                for(i = 0; i < MAX_IDE_CONTROLLERS && ide_index < 0; i++) {
+                    for(uint8_t j = 0; j < 2; j++) {
+                        const bool master = (j == 0);
+
+                        if(isIDEControllerPresent(i) &&
+                            IDE_controller_occupied(i, master) &&
+                            IDE_is_CDROM(i, master)) {
+                            /* Found a mounted CD-ROM Drive */
+                            ide_index = i;
+                            ide_slave = !master;
+                            break;
+                        }
+                    }
+                }
+
+                if(ide_index < 0) {
+                    int8_t drive_index = 2;
+                    for(drive_index = 2; drive_index < DOS_DRIVES; drive_index++) {
+                        if(!Drives[drive_index]) {
+                            const bool secondary_present = isIDEControllerPresent(1); // Secondary IDE controller is recommended for CD-ROM drives
+
+                            if((secondary_present &&
+                                IDE_controller_occupied(1, false)) ||
+                                !secondary_present) {
+                                /* Search for empty slot if IDE secondary master is already occupied */
+                                IDE_Auto(ide_index, ide_slave);
+
+                                if(ide_index < 0) {
+                                    LOG_MSG("BOOT: No available IDE index for CD-ROM drive");
+                                }
+                            }
+                            else {
+                                /* Mount empty drive to IDE secondary master (recommended) */
+                                ide_index = 1;
+                                ide_slave = false;
+                            }
+
+                            if(ide_index >= 0) {
+                                std::string mount_string =
+                                    std::string(1, drive_index + 'A') +
+                                    " empty -ide " +
+                                    std::to_string(ide_index + 1) +
+                                    (ide_slave ? "s" : "m")
+                                    + " -t cdrom ";
+
+                                //LOG_MSG("BOOT: imgmount command = [%s]", mount_string.c_str());
+
+                                runImgmount(mount_string.c_str());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
 
             /* zero out DOS memory */
             if (!dos_kernel_disabled && zeromem) {
@@ -3498,7 +3575,7 @@ static void BOOT_ProgramStart(Program * * make) {
 }
 
 void runBoot(const char *str) {
-	BOOT boot;
+	BOOT boot(dos_kernel_disabled ? Program::prg_nopsp : 0);
 	boot.cmd=new CommandLine("BOOT", str);
 	boot.Run();
 }
@@ -10707,7 +10784,8 @@ void DOS_SetupPrograms(void) {
         "  harddrive.img    Specify a single hard disk image to boot from drive C:.\n"
         "  Add a leading colon (:) to treat the image as write-protected.\n\n"
         "  [-E <command>]   Specify a command string for PCjr cartridge images.\n"
-        "  [-L driveletter] Ignored option, accepted only for compatibility.\n\n"
+        "  [-L driveletter] Ignored option, accepted only for compatibility.\n"
+        "  [-auto-floppy][-auto-cdrom] Mount an empty floppy/CD image if not mounted.\n\n"
         "Examples:\n"
         "\033[32;1mBOOT A:\033[0m       Boot from drive A: if it is mounted and bootable.\n"
         "\033[32;1mBOOT disk1.img disk2.img\033[0m Boot from floppy images using a swap list on drive A:.\n"

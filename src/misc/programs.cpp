@@ -64,7 +64,7 @@ extern const char *modifier;
 extern unsigned int sendkeymap;
 extern std::string langname, configfile, dosbox_title;
 extern int autofixwarn, enablelfn, fat32setver, paste_speed, wheel_key, freesizecap, wpType, wpVersion, wpBG, wpFG, lastset, blinkCursor, msgcodepage;
-extern bool dos_kernel_disabled, force_nocachedir, wpcolon, convertimg, lockmount, enable_config_as_shell_commands, lesssize, load, winrun, winautorun, startcmd, startwait, startquiet, starttranspath, mountwarning, wheel_guest, clipboard_dosapi, noremark_save_state, force_load_state, sync_time, manualtime, ttfswitch, loadlang, showbold, showital, showline, showsout, char512, printfont, rtl, gbk, chinasea, uao, showdbcs, dbcs_sbcs, autoboxdraw, halfwidthkana, ticksLocked, outcon, enable_dbcs_tables, show_recorded_filename, internal_program, pipetmpdev, notrysgf, uselangcp, incall;
+extern bool dos_kernel_disabled, force_nocachedir, wpcolon, convertimg, lockmount, enable_config_as_shell_commands, lesssize, load, winrun, winautorun, startcmd, startwait, startquiet, starttranspath, mountwarning, wheel_guest, clipboard_dosapi, dos_utf8names, noremark_save_state, force_load_state, sync_time, manualtime, ttfswitch, loadlang, showbold, showital, showline, showsout, char512, printfont, rtl, gbk, chinasea, uao, showdbcs, dbcs_sbcs, autoboxdraw, halfwidthkana, ticksLocked, outcon, enable_dbcs_tables, show_recorded_filename, internal_program, pipetmpdev, notrysgf, uselangcp, incall;
 extern bool clipboard_biospaste;
 /* This registers a file on the virtual drive and creates the correct structure for it*/
 
@@ -237,6 +237,11 @@ void Program::ChangeToLongCmd() {
 bool resetcolor = false;
 static char last_written_character = 0;//For 0xA to OxD 0xA expansion
 void Program::WriteOut(const char * format,...) {
+	if (dos_kernel_disabled) {
+		LOG(LOG_MISC,LOG_WARN)("Call to Program::WriteOut while DOS kernel is disabled string format='%s'",format);
+		return;
+	}
+
 	uint8_t attr = DOS_GetAnsiAttr();
 	char buf[2048];
 	va_list msg;
@@ -271,6 +276,11 @@ void Program::WriteOut(const char * format,...) {
 }
 
 void Program::WriteOut(const char *format, const char *arguments) {
+	if (dos_kernel_disabled) {
+		LOG(LOG_MISC,LOG_WARN)("Call to Program::WriteOut while DOS kernel is disabled string format='%s'",format);
+		return;
+	}
+
 	char buf[2048 + CMD_MAXLINE];
 	sprintf(buf,format,arguments);
 
@@ -298,6 +308,11 @@ void Program::WriteOut(const char *format, const char *arguments) {
 }
 
 int Program::WriteOut_NoParsing(const char * format, bool dbcs) {
+	if (dos_kernel_disabled) {
+		LOG(LOG_MISC,LOG_WARN)("Call to Program::WriteOut_NoParsing while DOS kernel is disabled string format='%s'",format);
+		return 0;
+	}
+
 	uint16_t size = (uint16_t)strlen(format);
 	char const* buf = format;
 	char last2 = 0, last3 = 0;
@@ -779,7 +794,7 @@ void Load_Language(std::string name) {
 }
 
 void ApplySetting(std::string pvar, std::string inputline, bool quiet) {
-    if (!strcasecmp(pvar.c_str(), "dosbox")||!strcasecmp(pvar.c_str(), "dos")||!strcasecmp(pvar.c_str(), "dosv")||!strcasecmp(pvar.c_str(), "cpu")||!strcasecmp(pvar.c_str(), "sdl")||!strcasecmp(pvar.c_str(), "ttf")||!strcasecmp(pvar.c_str(), "render")||!strcasecmp(pvar.c_str(), "serial")||!strcasecmp(pvar.c_str(), "parallel")||!strcasecmp(pvar.c_str(), "printer")) {
+    if (!strcasecmp(pvar.c_str(), "dosbox")||!strcasecmp(pvar.c_str(), "dos")||!strcasecmp(pvar.c_str(), "dosv")||!strcasecmp(pvar.c_str(), "cpu")||!strcasecmp(pvar.c_str(), "sdl")||!strcasecmp(pvar.c_str(), "ttf")||!strcasecmp(pvar.c_str(), "render")||!strcasecmp(pvar.c_str(), "video")||!strcasecmp(pvar.c_str(), "serial")||!strcasecmp(pvar.c_str(), "parallel")||!strcasecmp(pvar.c_str(), "printer")) {
         Section_prop *section = static_cast<Section_prop *>(control->GetSection(pvar.c_str()));
         if (section != NULL) {
             if (!strcasecmp(pvar.c_str(), "dosbox")) {
@@ -1033,6 +1048,8 @@ void ApplySetting(std::string pvar, std::string inputline, bool quiet) {
                 } else if (!strcasecmp(inputline.substr(0, 18).c_str(), "dos clipboard api=")) {
                     clipboard_dosapi = section->Get_bool("dos clipboard api");
                     mainMenu.get_item("clipboard_dosapi").check(clipboard_dosapi).refresh_item(mainMenu);
+                } else if (!strcasecmp(inputline.substr(0, 16).c_str(), "utf8 file names=")) {
+                    dos_utf8names = section->Get_bool("utf8 file names");
                 } else if (!strcasecmp(inputline.substr(0, 22).c_str(), "pipe temporary device=")) {
                     pipetmpdev = section->Get_bool("pipe temporary device");
 #if defined(WIN32) && !defined(HX_DOS)
@@ -1283,6 +1300,11 @@ void ApplySetting(std::string pvar, std::string inputline, bool quiet) {
                 else if (!strcasecmp(inputline.substr(0, 13).c_str(), "aspect_ratio=")) {
                     setAspectRatio(section);
                     if (render.aspect) GFX_ForceRedrawScreen();
+                }
+            } else if (!strcasecmp(pvar.c_str(), "video")) {
+                if (!strcasecmp(inputline.substr(0, 10).c_str(), "composite=")) {
+                    void CGA_ApplyCompositeSetting(bool apply);
+                    CGA_ApplyCompositeSetting(true);
                 }
             } else if (!strcasecmp(pvar.c_str(), "serial")) {
                 if (!strcasecmp(inputline.substr(0, 6).c_str(), "serial") && inputline[7]=='=') {

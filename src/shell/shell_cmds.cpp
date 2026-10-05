@@ -3871,11 +3871,18 @@ bool set_ver(char *s);
 void DOS_Shell::CMD_VER(char *args) {
 	HELP("VER");
 	bool optR=ScanCMDBool(args,"R");
+    bool optV=ScanCMDBool(args,"V");
 	if (char* rem = ScanCMDRemain(args)) {
 		WriteOut(MSG_Get("SHELL_ILLEGAL_SWITCH"), rem);
 		return;
 	}
-	if(!optR && args && *args) {
+    if (optV)
+    {
+        WriteOut("%d.%02d\n", dos.version.major, dos.version.minor);
+        if (optR) WriteOut("%s / %s / %d-bit", GIT_COMMIT_HASH, OS_PLATFORM_LONG, OS_BIT_INT);
+        return;
+    }
+	if (!optR && args && *args) {
 		char* word = StripWord(args);
 		if(strcasecmp(word,"set")) {
 			if (*word=='=') word=trim(word+1);
@@ -4220,6 +4227,7 @@ void DOS_Shell::CMD_ADDKEY(char * args){
 #  if C_DEBUG
 extern bool tohide;
 bool debugger_break_on_exec = false;
+unsigned int debugger_box_depth = 0;
 void DEBUG_Enable_Handler(bool pressed);
 void DOS_Shell::CMD_DEBUGBOX(char * args) {
     while (*args == ' ') args++;
@@ -4236,9 +4244,15 @@ void DOS_Shell::CMD_DEBUGBOX(char * args) {
 		args[0]='/';
 		HELP("DEBUGBOX");
 		return;
-	}
+    }
     debugger_break_on_exec = true;
+#if defined(C_DOSBOX_AGENT)
+    ++debugger_box_depth;
+#endif
     DoCommand((char *)argv.c_str());
+#if defined(C_DOSBOX_AGENT)
+    --debugger_box_depth;
+#endif
     debugger_break_on_exec = false;
 }
 # endif

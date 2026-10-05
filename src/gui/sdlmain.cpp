@@ -32,6 +32,11 @@
 # endif
 #endif
 
+#if defined(C_DOSBOX_AGENT)
+#include "agent/agent_bridge.h"
+#include "agent/agent_server.h"
+#endif
+
 #ifdef OS2
 # define INCL_DOS
 # define INCL_WIN
@@ -277,6 +282,7 @@ typedef enum PROCESS_DPI_AWARENESS {
 #include "keyboard.h"
 #include "cpu.h"
 #include "fpu.h"
+#include "logging.h"
 #include "cross.h"
 #include "keymap.h"
 #include "voodoo.h"
@@ -770,6 +776,7 @@ void DOS_ShutdownFiles();
 void FreeBIOSDiskList();
 void GFX_ShutDown(void);
 void MAPPER_Shutdown();
+void RENDER_Shutdown();
 void SHELL_Init(void);
 void SHELL_MessagesInit(void);
 void CopyClipboard(int all);
@@ -1970,18 +1977,19 @@ SDL_Window* GFX_SetSDLWindowMode(uint16_t width, uint16_t height, SCREEN_TYPES s
 	/*
 	 * When modeswitching _is_ enabled let's go with sane values.
 	 */
-	bool isModeSwicthSet = vga.draw.modeswitch_set;
+	bool isModeswicthSet = vga.draw.modeswitch_set;
 
-	if(isModeSwicthSet) {
-		flags = SDL_WINDOW_FULLSCREEN;
-		width = vga.draw.width;
-		height = vga.draw.height;
-	}
 #endif
 
     if (GFX_IsFullscreen()) {
         SDL_DisplayMode displayMode;
         SDL_GetWindowDisplayMode(sdl.window, &displayMode);
+
+	if(isModeswicthSet) {
+		flags = SDL_WINDOW_FULLSCREEN;
+		width = vga.draw.width;
+		height = vga.draw.height;
+	}
 
         displayMode.w = width;
         displayMode.h = height;
@@ -7544,6 +7552,10 @@ bool DOSBOX_parse_argv() {
             fprintf(stderr,"  -log-fileio                             Log file I/O through INT 21h (debug level)\n");
             fprintf(stderr,"  -nolog                                  Do not log anything to log file\n");
             fprintf(stderr,"  -tests                                  Run unit tests to test the DOSBox-X code\n");
+#if defined(C_DOSBOX_AGENT)
+            fprintf(stderr,"  -agent-config <path>                    Load agent configuration from an explicit file\n");
+            fprintf(stderr,"  -agent-self-test                        Verify agent startup and emulation queue behavior\n");
+#endif
             fprintf(stderr,"  -print-ticks                            (Debug) Print emulator time and SDL_GetTicks()\n");
             fprintf(stderr,"  -force-gfx-hardware                     Force render scaler system to act as if GFX_HARDWARE\n");
             fprintf(stderr,"\n");
@@ -7569,6 +7581,14 @@ bool DOSBOX_parse_argv() {
         else if (optname == "log-con") {
             control->opt_log_con = true;
         }
+#if defined(C_DOSBOX_AGENT)
+        else if (optname == "agent-config") {
+            if (!control->cmdline->NextOptArgv(control->opt_agent_config)) return false;
+        }
+        else if (optname == "agent-self-test") {
+            control->opt_agent_self_test = true;
+        }
+#endif
         else if (optname == "nolog") {
             control->opt_nolog = true;
         }
@@ -7803,22 +7823,65 @@ bool DOSBOX_parse_argv() {
         control->cmdline->GetCurrentArgv(tmp);
         trim(tmp);
         localname = tmp;
-        int rescp = FileDirExistCP(tmp.c_str()), resutf8 = rescp||!tmp.size()?0:FileDirExistUTF8(localname, tmp.c_str());
+        std::string args;
+        size_t argpos = std::string::npos;
+        size_t p = 0;
+        while((p = tmp.find('.', p)) != std::string::npos) {
+            size_t end = p + 4;
+            if((end == tmp.size() || tmp[end] == ' ') &&
+                (!strcasecmp(tmp.substr(p, 4).c_str(), ".bat") ||
+                    !strcasecmp(tmp.substr(p, 4).c_str(), ".exe") ||
+                    !strcasecmp(tmp.substr(p, 4).c_str(), ".com"))) {
+                argpos = end;
+            }
+            p = end;
+        }
+        if(argpos != std::string::npos && argpos < tmp.size()) {
+            args = tmp.substr(argpos);
+            trim(args);
+            localname = tmp.substr(0, argpos);
+            trim(localname);
+            
+        }
+        int rescp = FileDirExistCP(localname.c_str()), resutf8 = rescp || !localname.size() ? 0 : FileDirExistUTF8(localname, localname.c_str());
         if (!rescp && resutf8) {
             tmp = localname;
             rescp = resutf8;
         }
         const char *ext = strrchr(tmp.c_str(),'.'); /* if it looks like a file... with an extension */
+        if(ext != NULL && (!strcasecmp(ext, ".bat") || !strcasecmp(ext, ".exe") || !strcasecmp(ext, ".com"))) {
+                        /* no arguments */
+        }
+        else if(ext != NULL) {
+            const char* space = strchr(ext, ' ');
+            if(space != NULL && (size_t)(space - ext) == 4) {
+                localname = tmp.substr(0, space - tmp.c_str());
+                ext = strrchr(localname.c_str(), '.');
+            }
+        }
         if (rescp) {
             if (rescp == 2 || (ext != NULL && rescp == 1 && (!strcasecmp(ext,".zip") || !strcasecmp(ext,".7z")))) {
                 control->auto_bat_additional.push_back("@mount c: \""+tmp+"\" -nl");
                 control->cmdline->EatCurrentArgv();
                 continue;
             } else if (ext != NULL && rescp == 1 && (!strcasecmp(ext,".bat") || !strcasecmp(ext,".exe") || !strcasecmp(ext,".com"))) { /* .BAT files given on the command line trigger automounting C: to run it */
+                // FIX_ME: Should we mount the directory of the executable to C:? (Code currently disabled)
+                /**
+                std::string mountpath = ".";
+                size_t pos = tmp.find_last_of("\\/");
+                if(pos != std::string::npos) {
+                    mountpath = tmp.substr(0, pos);
+                    if(mountpath.empty()) mountpath = "\\";
+                }
+                control->auto_bat_additional.push_back("@mount c: \"" + mountpath + "\" -nl"); // mount the directory of the executable to C:
+                */
                 control->auto_bat_additional.push_back(tmp);
                 control->cmdline->EatCurrentArgv();
                 continue;
             }
+        }
+        else if(ext != NULL && (!strcasecmp(ext, ".bat") || !strcasecmp(ext, ".exe") || !strcasecmp(ext, ".com"))) {
+            LOG_MSG("WARNING: Executable specified on the command line was not found and ignored: %s\n", localname.c_str());
         }
 
         control->cmdline->NextArgv();
@@ -7876,6 +7939,7 @@ void SBLASTER_Init();
 void GUS_Init();
 void IMFC_Init();
 void INNOVA_Init();
+void WSS_Init();
 void PCSPEAKER_Init();
 void TANDYSOUND_Init();
 void DISNEY_Init();
@@ -8446,6 +8510,9 @@ int main(int argc, char* argv[]) SDL_MAIN_NOEXCEPT {
     CommandLine com_line(argc,argv);
     Config myconf(&com_line);
     bool saved_opt_test;
+#if defined(C_DOSBOX_AGENT)
+    dosbox_agent::AgentServer agent_server;
+#endif
 
     srand(time(NULL));
 
@@ -8476,6 +8543,34 @@ int main(int argc, char* argv[]) SDL_MAIN_NOEXCEPT {
     /* -- Early logging init, in case these details are needed to debug problems at this level */
     /*    If --early-debug was given this opens up logging to STDERR until Log::Init() */
     LOG::EarlyInit();
+
+#if defined(C_DOSBOX_AGENT)
+    if (control->opt_agent_self_test && control->opt_agent_config.empty()) {
+        LOG_MSG("Agent self-test requires --agent-config <path>");
+        return 1;
+    }
+    if (!control->opt_agent_config.empty()) {
+        std::string agent_error;
+        if (!agent_server.StartFromConfigFile(control->opt_agent_config, &agent_error)) {
+            LOG_MSG("Agent startup failed: %s", agent_error.c_str());
+            return 1;
+        }
+        LOG_MSG("%s", dosbox_agent::AGENT_FormatStartupLog(*agent_server.GetConfig()).c_str());
+    }
+    if (control->opt_agent_self_test) {
+        std::string agent_error;
+        if (!dosbox_agent::AGENT_RunQueueSelfTest(&agent_error)) {
+            LOG_MSG("Agent queue self-test failed: %s", agent_error.c_str());
+            return 1;
+        }
+        if (!agent_server.RunProtocolSelfTest(&agent_error)) {
+            LOG_MSG("Agent protocol self-test failed: %s", agent_error.c_str());
+            return 1;
+        }
+        LOG_MSG("Agent self-test completed: success");
+        return 0;
+    }
+#endif
 
     /* -- Init the configuration system and add default values */
     CheckNumLockState();
@@ -9801,6 +9896,7 @@ int main(int argc, char* argv[]) SDL_MAIN_NOEXCEPT {
         IDE_Init();
         IMFC_Init();
         INNOVA_Init();
+        WSS_Init();
         BIOS_Init();
         INT10_Init();
         SERIAL_Init();
@@ -10639,6 +10735,7 @@ fresh_boot:
         CPU_Core_Dyn_X86_Shutdown();
 #endif
         FreeBIOSDiskList();
+        RENDER_Shutdown();
         MAPPER_Shutdown();
         VFILE_Shutdown();
         PROGRAMS_Shutdown();
@@ -10684,6 +10781,11 @@ fresh_boot:
 		duk_destroy_heap(js_heap);
 		js_heap = NULL;
 	}
+#endif
+
+#if defined(C_DOSBOX_AGENT)
+        agent_server.Stop();
+        dosbox_agent::AGENT_BridgeShutdown();
 #endif
 
         LOG::Exit();
