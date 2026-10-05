@@ -64,7 +64,10 @@ enum class GDBAction {
 
 class GDBServer {
 public:
-    GDBServer(int port) : port(port), server_fd(-1), client_fd(-1),
+    /* address is the IPv4 address to listen on. Neither server
+     * authenticates, so callers pass loopback unless told otherwise. */
+    GDBServer(int port, const std::string& address = "127.0.0.1")
+        : port(port), bind_address(address), server_fd(-1), client_fd(-1),
                           running(false), noack_mode(false) {}
     ~GDBServer() { stop(); }
 
@@ -84,6 +87,7 @@ public:
 
 private:
     int port;
+    std::string bind_address;
     int server_fd;
     int client_fd;
     bool running;

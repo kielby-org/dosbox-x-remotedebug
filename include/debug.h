@@ -50,10 +50,10 @@ bool DEBUG_SetBreakpoint(uint32_t address);
 bool DEBUG_RemoveBreakpoint(uint32_t address);
 bool DEBUG_SaveMemoryBin(const char* filepath, uint32_t address, uint32_t size);
 #if C_REMOTEDEBUG
-void DEBUG_StartGDBServer(int port);
+void DEBUG_StartGDBServer(int port, const char* address);
 void DEBUG_StopGDBServer();
 bool DEBUG_IsGDBServerRunning();
-void DEBUG_StartQMPServer(int port);
+void DEBUG_StartQMPServer(int port, const char* address);
 void DEBUG_StopQMPServer();
 bool DEBUG_IsQMPServerRunning();
 void DEBUG_CloseDebugger();  // Close debugger UI and resume execution

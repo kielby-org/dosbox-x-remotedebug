@@ -111,8 +111,13 @@ void GDBServer::setup_socket() {
     fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
 
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(port);
+    if (inet_pton(AF_INET, bind_address.c_str(), &address.sin_addr) != 1) {
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: invalid gdbserver address '%s'", bind_address.c_str());
+        close(server_fd);
+        server_fd = -1;
+        return;
+    }
 
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: bind failed: %s", strerror(errno));
@@ -128,7 +133,7 @@ void GDBServer::setup_socket() {
         return;
     }
 
-    LOG(LOG_REMOTE, LOG_NORMAL)("GDBServer: Listening on port %d", port);
+    LOG(LOG_REMOTE, LOG_NORMAL)("GDBServer: Listening on %s:%d", bind_address.c_str(), port);
 }
 
 bool GDBServer::try_accept() {

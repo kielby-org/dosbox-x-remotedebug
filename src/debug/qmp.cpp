@@ -389,8 +389,13 @@ void QMPServer::setup_socket() {
     }
 
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(port);
+    if (inet_pton(AF_INET, bind_address.c_str(), &address.sin_addr) != 1) {
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: invalid qmpserver address '%s'", bind_address.c_str());
+        close(server_fd);
+        server_fd = -1;
+        return;
+    }
 
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: bind failed on port %d", port);
@@ -402,7 +407,7 @@ void QMPServer::setup_socket() {
         return;
     }
 
-    LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Listening on port %d", port);
+    LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Listening on %s:%d", bind_address.c_str(), port);
 }
 
 void QMPServer::wait_for_client() {
@@ -1281,13 +1286,13 @@ void QMPServer::handle_debug_break_on_exec(const std::string& cmd) {
 }
 
 // Public interface
-void QMP_StartServer(int port) {
+void QMP_StartServer(int port, const std::string& address) {
     if (qmpServer != nullptr) {
         LOG(LOG_REMOTE, LOG_WARN)("QMP: Server already running");
         return;
     }
 
-    qmpServer = new QMPServer(port);
+    qmpServer = new QMPServer(port, address);
     qmpServer->start();
 }
 

@@ -63,7 +63,8 @@ struct QMPInputEvent {
 
 class QMPServer {
 public:
-    QMPServer(int port) : port(port), server_fd(-1), client_fd(-1), running(false) {}
+    QMPServer(int port, const std::string& address = "127.0.0.1")
+        : port(port), bind_address(address), server_fd(-1), client_fd(-1), running(false) {}
     ~QMPServer() { stop(); }
 
     void start();  // Start server in a new thread
@@ -76,6 +77,7 @@ public:
 
 private:
     int port;
+    std::string bind_address;
     int server_fd, client_fd;
     std::atomic<bool> running{false};
     std::thread server_thread;
@@ -139,7 +141,7 @@ private:
 };
 
 // Public interface for debug.cpp
-void QMP_StartServer(int port);
+void QMP_StartServer(int port, const std::string& address);
 void QMP_StopServer();
 bool QMP_IsServerRunning();
 void QMP_ProcessPendingInputEvents();

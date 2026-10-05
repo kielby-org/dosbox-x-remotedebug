@@ -982,7 +982,7 @@ bool gdbserver_menu_callback(DOSBoxMenu * const menu,DOSBoxMenu::item * const me
         SetVal("dosbox", "gdbserver", "false");
     } else {
         int port = section ? section->Get_int("gdbserver port") : 2159;
-        DEBUG_StartGDBServer(port);
+        DEBUG_StartGDBServer(port, section ? section->Get_string("gdbserver address") : "127.0.0.1");
         SetVal("dosbox", "gdbserver", "true");
     }
 
@@ -1002,7 +1002,7 @@ bool qmpserver_menu_callback(DOSBoxMenu * const menu,DOSBoxMenu::item * const me
         SetVal("dosbox", "qmpserver", "false");
     } else {
         int port = section ? section->Get_int("qmpserver port") : 4444;
-        DEBUG_StartQMPServer(port);
+        DEBUG_StartQMPServer(port, section ? section->Get_string("qmpserver address") : "127.0.0.1");
         SetVal("dosbox", "qmpserver", "true");
     }
 

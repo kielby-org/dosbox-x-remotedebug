@@ -1801,11 +1801,20 @@ void DOSBOX_SetupConfigSections(void) {
     Pint = secprop->Add_int("gdbserver port",Property::Changeable::OnlyAtStart,2159);
     Pint->Set_help("TCP port for the GDB server to listen on.");
 
+    Pstring = secprop->Add_string("gdbserver address",Property::Changeable::OnlyAtStart,"127.0.0.1");
+    Pstring->Set_help("IPv4 address for the GDB server to listen on. The server has no authentication: anyone who can\n"
+                      "reach it can read and write guest memory. Use 0.0.0.0 to listen on all interfaces.");
+
     Pbool = secprop->Add_bool("qmpserver",Property::Changeable::WhenIdle,false);
     Pbool->Set_help("If set, start a QMP (QEMU Monitor Protocol) server for keyboard input injection.");
 
     Pint = secprop->Add_int("qmpserver port",Property::Changeable::OnlyAtStart,4444);
     Pint->Set_help("TCP port for the QMP server to listen on.");
+
+    Pstring = secprop->Add_string("qmpserver address",Property::Changeable::OnlyAtStart,"127.0.0.1");
+    Pstring->Set_help("IPv4 address for the QMP server to listen on. The server has no authentication, and memdump,\n"
+                      "screendump and savestate write host files at paths the client chooses. Use 0.0.0.0 to\n"
+                      "listen on all interfaces.");
 #endif
 
     Pint = secprop->Add_int("mcp_server", Property::Changeable::OnlyAtStart, 0);
