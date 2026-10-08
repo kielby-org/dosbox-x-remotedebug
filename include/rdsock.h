@@ -152,16 +152,24 @@ static inline bool rd_set_nonblocking(rd_sock_t s) {
 #endif
 }
 
-/* Reuse option for the listening socket. On POSIX this is the call the servers
- * always made, unchanged. Windows is different: SO_REUSEADDR there lets another
- * process bind the same port and steal connections, and rebinding past
- * TIME_WAIT is already allowed, so ask for exclusive use of the address. */
+/* Reuse options for the listening socket, so a restart can rebind a port that
+ * is still in TIME_WAIT. On POSIX these are SO_REUSEADDR and, where it exists,
+ * SO_REUSEPORT, set one at a time: they are separate option numbers, and
+ * OR-ing them into a single value happens to name SO_REUSEPORT on Linux but an
+ * invalid option on macOS ("Protocol not available"). Windows is different:
+ * SO_REUSEADDR there lets another process bind the same port and steal
+ * connections, and rebinding past TIME_WAIT is already allowed, so ask for
+ * exclusive use of the address instead. */
 static inline bool rd_set_reuse(rd_sock_t s) {
     int on = 1;
 #ifdef WIN32
     return setsockopt((SOCKET)s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&on, sizeof(on)) == 0;
 #else
-    return setsockopt(s, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &on, sizeof(on)) == 0;
+    if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) return false;
+# ifdef SO_REUSEPORT
+    if (setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on)) < 0) return false;
+# endif
+    return true;
 #endif
 }
 
