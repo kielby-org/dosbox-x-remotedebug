@@ -1037,7 +1037,7 @@ extern "C" {
 // =======================================================================//
 
         // inet_ntop/inet_pton for MinGW from http://mingw-users.1079350.n2.nabble.com/IPv6-getaddrinfo-amp-inet-ntop-td5891996.html
-#if !defined(__MINGW64_VERSION_MAJOR)
+#if !defined(__MINGW64_VERSION_MAJOR) && !(defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0600)
         const char *inet_ntop(int af, const void *src, char *dst, socklen_t cnt) {
             if (af == AF_INET) {
                 struct sockaddr_in in;
