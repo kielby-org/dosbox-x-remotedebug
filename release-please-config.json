@@ -5,6 +5,7 @@
     ".": {
       "release-type": "simple",
       "package-name": "dosbox-x-remotedebug",
+      "initial-version": "0.1.0",
       "component": "remotedebug",
       "include-component-in-tag": true,
       "changelog-path": "CHANGELOG-REMOTEDEBUG.md",
