@@ -1,0 +1,178 @@
+name: Remote debug release
+
+# Builds DOSBox-X with the GDB/QMP remote debug servers enabled, runs the
+# integration tests against each build, and attaches the packages to a GitHub
+# release. release-please.yml calls this after it publishes a release; it can
+# also be run by hand (Actions > Remote debug release > Run workflow):
+#   - give it a release tag such as remotedebug-v0.1.0 to rebuild and attach
+#     that release's packages;
+#   - leave it empty to build the current branch and keep the packages as
+#     workflow artifacts only.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Release tag to build and attach to (empty = build only)
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+
+env:
+  # The integration tests start their own emulator with no display or sound.
+  SDL_VIDEODRIVER: dummy
+  SDL_AUDIODRIVER: dummy
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: microsoft/setup-msbuild@v3
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Build
+        shell: pwsh
+        run: |
+          msbuild -m vs/dosbox-x.sln -t:dosbox-x:Rebuild -p:Configuration="Release SDL2" -p:Platform=x64 -p:RemoteDebug=true
+          if (-not (Test-Path "bin\x64\Release SDL2\dosbox-x.exe" -PathType Leaf)) { exit 1 }
+      - name: Integration tests
+        shell: bash
+        run: |
+          pip install pytest
+          cd tests/integration && python -m pytest -q --tb=short
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "dosbox-x-remotedebug-windows-x64-${{ inputs.ref || github.ref_name }}"
+          New-Item -ItemType Directory -Path package/$out | Out-Null
+          Copy-Item "bin/x64/Release SDL2/*" package/$out -Recurse
+          Get-ChildItem package/$out -Include *.pdb,*.lib,*.exp -Recurse | Remove-Item
+          Copy-Item COPYING package/$out/COPYING.txt
+          Compress-Archive -Path package/$out -DestinationPath "$out.zip"
+          echo "PACKAGE=$out.zip" >> $env:GITHUB_ENV
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install libraries
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y nasm fluidsynth libfluidsynth-dev libpcap-dev libslirp-dev libsdl-net1.2-dev libsdl2-net-dev libglu1-mesa-dev freeglut3-dev mesa-common-dev libpng-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libavcodec-extra
+      - name: Build
+        run: ./build-debug-sdl2 --enable-avcodec --enable-remotedebug
+      - name: Integration tests
+        run: |
+          pip install pytest
+          cd tests/integration && python -m pytest -q --tb=short
+      - name: Package
+        run: |
+          out="dosbox-x-remotedebug-linux-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
+          mkdir -p "package/$out"/{drivez,glshaders,languages}
+          cp src/dosbox-x "package/$out/dosbox-x"
+          strip -s "package/$out/dosbox-x"
+          cp CHANGELOG "package/$out/CHANGELOG.txt"
+          cp COPYING "package/$out/COPYING.txt"
+          cp dosbox-x.reference.conf dosbox-x.reference.full.conf "package/$out/"
+          cp contrib/fonts/FREECG98.BMP contrib/fonts/Nouveau_IBM.ttf contrib/fonts/SarasaGothicFixed.ttf "package/$out/"
+          cp contrib/fonts/wqy_1?pt.bdf "package/$out/"
+          cp contrib/windows/installer/drivez_readme.txt "package/$out/drivez/readme.txt"
+          cp contrib/glshaders/* "package/$out/glshaders/"
+          cp contrib/translations/*/*.lng "package/$out/languages/"
+          tar -C package -czf "$out.tar.gz" "$out"
+          echo "PACKAGE=$out.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install libraries
+        run: brew install autoconf automake nasm glfw glew coreutils sevenzip libslirp fluid-synth pkg-config libtool ffmpeg@7
+      - name: Build
+        run: |
+          ./build-macos-sdl2 --enable-remotedebug
+          make dosbox-x.app
+      - name: Integration tests
+        run: |
+          pip install pytest
+          cd tests/integration && python -m pytest -q --tb=short
+      - name: Package
+        run: |
+          out="dosbox-x-remotedebug-macos-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
+          mkdir -p "package/$out"
+          strip dosbox-x.app/Contents/MacOS/dosbox-x
+          mv dosbox-x.app "package/$out/"
+          cp CHANGELOG "package/$out/CHANGELOG.txt"
+          cp COPYING "package/$out/COPYING.txt"
+          cp contrib/macos/readme.txt "package/$out/README.txt"
+          # ditto keeps the app bundle's permissions and symlinks intact.
+          ditto -c -k --keepParent "package/$out" "$out.zip"
+          echo "PACKAGE=$out.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}
+
+  release:
+    # Only when given a release tag; a plain branch build stops at the artifacts.
+    if: startsWith(inputs.ref, 'remotedebug-v')
+    needs: [windows-x64, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the packages to the release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Checksums
+        run: cd packages && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.ref }}
+        run: gh release upload "$TAG" packages/* --clobber --repo "$GITHUB_REPOSITORY"

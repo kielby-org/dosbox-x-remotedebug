@@ -1,0 +1,45 @@
+name: Release Please
+
+# Same layout as vscode-dos-debug:
+# - every push to the remotedebug branch keeps a "chore(remotedebug): release x.y.z" PR up
+#   to date with the next version (from the Conventional Commit titles) and the CHANGELOG entry;
+# - merging that PR makes release-please tag the commit and publish the GitHub Release;
+# - the assets job then builds the packages for every platform from the tag and attaches them
+#   (remotedebug-release.yml). It is called directly because a tag pushed with the default
+#   GITHUB_TOKEN does not start other workflows.
+on:
+  push:
+    branches: [remotedebug]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: remotedebug
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  assets:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/remotedebug-release.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag_name }}
