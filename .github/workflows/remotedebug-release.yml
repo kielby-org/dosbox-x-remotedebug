@@ -148,13 +148,14 @@ jobs:
         run: |
           # The integration launcher discards the emulator's output; show it.
           strings src/dosbox-x | grep -c "GDBServer:" || true
-          printf '[sdl]
-autolock=false
-[dosbox]
-quit warning=false
-gdbserver=true
-qmpserver=true
-' > "$RUNNER_TEMP/diag.conf"
+          cat > "$RUNNER_TEMP/diag.conf" <<'CONF'
+          [sdl]
+          autolock=false
+          [dosbox]
+          quit warning=false
+          gdbserver=true
+          qmpserver=true
+          CONF
           src/dosbox-x -conf "$RUNNER_TEMP/diag.conf" -log-con > "$RUNNER_TEMP/diag.out" 2>&1 &
           sleep 25
           head -80 "$RUNNER_TEMP/diag.out"
