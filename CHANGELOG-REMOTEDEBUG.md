@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.0...remotedebug-v0.1.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **remotedebug:** run the DOS or BIOS call a single step lands on ([#2](https://github.com/kielby-org/dosbox-x-remotedebug/issues/2)) ([7628465](https://github.com/kielby-org/dosbox-x-remotedebug/commit/7628465a9f9f436c420869098e2c31f16bd76741))
+
 ## 0.1.0 (2026-10-08)
 
 
