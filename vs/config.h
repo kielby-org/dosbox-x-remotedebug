@@ -19,15 +19,13 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-/* DOSBox-X currently targets Windows XP or higher. */
-/* TODO: Can we drop this to 0x500 for Windows 2000? */
-/* TODO: What is the minimum appropriate WINVER for HX DOS extender? */
+/* The Visual Studio build targets Windows 7 or higher. */
 #ifndef WINVER
-#define WINVER 0x0501
+#define WINVER 0x0601
 #endif
 
 #ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0501
+#define _WIN32_WINNT 0x0601
 #endif
 
 /* Define if building universal (internal helper macro) */
