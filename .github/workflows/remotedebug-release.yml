@@ -143,6 +143,23 @@ jobs:
         run: |
           pip install pytest pytest-timeout
           cd tests/integration && python -m pytest -v --tb=short --timeout=120 --maxfail=3
+      - name: Diagnose emulator start
+        if: failure()
+        run: |
+          # The integration launcher discards the emulator's output; show it.
+          strings src/dosbox-x | grep -c "GDBServer:" || true
+          printf '[sdl]
+autolock=false
+[dosbox]
+quit warning=false
+gdbserver=true
+qmpserver=true
+' > "$RUNNER_TEMP/diag.conf"
+          src/dosbox-x -conf "$RUNNER_TEMP/diag.conf" -log-con > "$RUNNER_TEMP/diag.out" 2>&1 &
+          sleep 25
+          head -80 "$RUNNER_TEMP/diag.out"
+          lsof -nP -iTCP -sTCP:LISTEN | grep -i dosbox || echo "nothing listening"
+          pkill dosbox-x || true
       - name: Package
         run: |
           out="dosbox-x-remotedebug-macos-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
