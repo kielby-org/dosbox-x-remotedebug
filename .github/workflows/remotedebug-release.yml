@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           pip install pytest pytest-timeout
-          cd tests/integration && python -m pytest -v --tb=short --timeout=120
+          cd tests/integration && python -m pytest -v --tb=short --timeout=120 --maxfail=3
       - name: Package
         shell: pwsh
         run: |
@@ -93,7 +93,7 @@ jobs:
       - name: Integration tests
         run: |
           pip install pytest pytest-timeout
-          cd tests/integration && python -m pytest -v --tb=short --timeout=120
+          cd tests/integration && python -m pytest -v --tb=short --timeout=120 --maxfail=3
       - name: Package
         run: |
           out="dosbox-x-remotedebug-linux-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
@@ -142,7 +142,7 @@ jobs:
       - name: Integration tests
         run: |
           pip install pytest pytest-timeout
-          cd tests/integration && python -m pytest -v --tb=short --timeout=120
+          cd tests/integration && python -m pytest -v --tb=short --timeout=120 --maxfail=3
       - name: Package
         run: |
           out="dosbox-x-remotedebug-macos-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
