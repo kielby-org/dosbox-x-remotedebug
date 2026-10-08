@@ -30,11 +30,7 @@
 #include <thread>
 #include <mutex>
 #include <queue>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
+#include "rdsock.h"
 
 #include "keyboard.h"
 
@@ -64,7 +60,7 @@ struct QMPInputEvent {
 class QMPServer {
 public:
     QMPServer(int port, const std::string& address = "127.0.0.1")
-        : port(port), bind_address(address), server_fd(-1), client_fd(-1), running(false) {}
+        : port(port), bind_address(address), server_fd(RD_BAD_SOCK), client_fd(RD_BAD_SOCK), running(false) {}
     ~QMPServer() { stop(); }
 
     void start();  // Start server in a new thread
@@ -78,7 +74,7 @@ public:
 private:
     int port;
     std::string bind_address;
-    int server_fd, client_fd;
+    rd_sock_t server_fd, client_fd;
     std::atomic<bool> running{false};
     std::thread server_thread;
 

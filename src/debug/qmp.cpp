@@ -17,6 +17,8 @@
  */
 
 #include "dosbox.h"
+#define RDSOCK_IMPL
+#include "rdsock.h"
 
 #if C_REMOTEDEBUG
 
@@ -24,7 +26,7 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
-#include <netinet/tcp.h>
+#include <cstdio>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -336,6 +338,10 @@ void QMPServer::start() {
         return;
     }
     // Set running before spawning thread so is_running() returns true immediately
+    if (!rd_net_init()) {
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: network stack init failed");
+        return;
+    }
     running.store(true);
     server_thread = std::thread(&QMPServer::run, this);
 }
@@ -359,14 +365,14 @@ void QMPServer::stop() {
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Stopping server...");
     // Use shutdown to unblock any blocking recv/accept calls
     if (client_fd != -1) {
-        shutdown(client_fd, SHUT_RDWR);
-        close(client_fd);
-        client_fd = -1;
+        rd_shutdown(client_fd);
+        rd_close(client_fd);
+        client_fd = RD_BAD_SOCK;
     }
     if (server_fd != -1) {
-        shutdown(server_fd, SHUT_RDWR);
-        close(server_fd);
-        server_fd = -1;
+        rd_shutdown(server_fd);
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
     }
     // Wait for server thread to finish
     if (server_thread.joinable()) {
@@ -376,15 +382,15 @@ void QMPServer::stop() {
 
 void QMPServer::setup_socket() {
     struct sockaddr_in address;
-    int opt = 1;
-
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((server_fd = rd_socket()) == RD_BAD_SOCK) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: socket failed");
         return;
     }
 
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+    if (!rd_set_reuse(server_fd)) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: setsockopt failed");
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
@@ -392,18 +398,22 @@ void QMPServer::setup_socket() {
     address.sin_port = htons(port);
     if (inet_pton(AF_INET, bind_address.c_str(), &address.sin_addr) != 1) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: invalid qmpserver address '%s'", bind_address.c_str());
-        close(server_fd);
-        server_fd = -1;
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: bind failed on port %d", port);
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
     if (listen(server_fd, 1) < 0) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: listen failed");
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
@@ -414,7 +424,7 @@ void QMPServer::wait_for_client() {
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
 
-    client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+    client_fd = rd_accept(server_fd, (struct sockaddr *)&address, &addrlen);
     if (client_fd < 0) {
         if (running.load()) {
             LOG(LOG_REMOTE, LOG_ERROR)("QMP: accept failed");
@@ -427,8 +437,7 @@ void QMPServer::wait_for_client() {
      * ~82ms per round-trip with it on, ~41ms with only the client fixed, so
      * both ends have to set it. Cost is per round-trip regardless of size, so
      * it falls entirely on trip count. */
-    int nodelay = 1;
-    setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    rd_set_nodelay(client_fd);
 
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Client connected");
 }
@@ -445,8 +454,8 @@ void QMPServer::handle_client() {
     }
 
     if (client_fd != -1) {
-        close(client_fd);
-        client_fd = -1;
+        rd_close(client_fd);
+        client_fd = RD_BAD_SOCK;
     }
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Client disconnected");
 }
@@ -468,7 +477,7 @@ void QMPServer::send_greeting() {
 
 void QMPServer::send_response(const std::string& response) {
     if (client_fd != -1) {
-        send(client_fd, response.c_str(), response.length(), 0);
+        rd_send(client_fd, response.c_str(), response.length());
     }
 }
 
@@ -487,7 +496,7 @@ std::string QMPServer::receive_command() {
     std::string cmd;
 
     while (running.load()) {
-        ssize_t bytes = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+        rd_ssize_t bytes = rd_recv(client_fd, buffer, sizeof(buffer) - 1);
         if (bytes <= 0) {
             return "";
         }
@@ -824,6 +833,17 @@ void QMPServer::handle_memdump(const std::string& cmd) {
 
     if (use_temp) {
         // Create temp file
+#ifdef WIN32
+        char temp_dir[MAX_PATH];
+        char temp_name[MAX_PATH];
+        DWORD dir_len = GetTempPathA(MAX_PATH, temp_dir);
+        if (dir_len == 0 || dir_len >= MAX_PATH ||
+            GetTempFileNameA(temp_dir, "dbx", 0, temp_name) == 0) {
+            send_error("GenericError", "Failed to create temp file");
+            return;
+        }
+        filepath = temp_name;
+#else
         filepath = "/tmp/dosbox_memdump_XXXXXX";
         char* temp_path = strdup(filepath.c_str());
         int fd = mkstemp(temp_path);
@@ -835,6 +855,7 @@ void QMPServer::handle_memdump(const std::string& cmd) {
         close(fd);
         filepath = temp_path;
         free(temp_path);
+#endif
     } else {
         filepath = file;
     }
@@ -857,7 +878,7 @@ void QMPServer::handle_memdump(const std::string& cmd) {
      * consumer. See section 3.1 of
      * docs/superpowers/specs/2026-09-03-dosbox-debug-harness-design.md. */
     if (!DEBUG_IsCpuPausedForDebug() && !EMULATOR_IsPaused()) {
-        if (use_temp) unlink(filepath.c_str());
+        if (use_temp) std::remove(filepath.c_str());
         send_error("GenericError",
                    "memdump requires the CPU to be stopped for debugging; "
                    "halt via GDB or QMP stop first");
@@ -866,7 +887,7 @@ void QMPServer::handle_memdump(const std::string& cmd) {
 
     // Perform the memory dump
     if (!DEBUG_SaveMemoryBin(filepath.c_str(), (uint32_t)address, (uint32_t)size)) {
-        if (use_temp) unlink(filepath.c_str());
+        if (use_temp) std::remove(filepath.c_str());
         send_error("GenericError", "Failed to dump memory");
         return;
     }
@@ -876,7 +897,7 @@ void QMPServer::handle_memdump(const std::string& cmd) {
         // Read file and return as base64
         std::ifstream infile(filepath, std::ios::binary);
         if (!infile) {
-            unlink(filepath.c_str());
+            std::remove(filepath.c_str());
             send_error("GenericError", "Failed to read dump file");
             return;
         }
@@ -884,7 +905,7 @@ void QMPServer::handle_memdump(const std::string& cmd) {
         std::vector<uint8_t> data((std::istreambuf_iterator<char>(infile)),
                                    std::istreambuf_iterator<char>());
         infile.close();
-        unlink(filepath.c_str());
+        std::remove(filepath.c_str());
 
         std::string b64 = base64_encode(data);
         response << "{\"return\": {\"data\": \"" << b64 << "\", \"size\": " << size << "}}\r\n";

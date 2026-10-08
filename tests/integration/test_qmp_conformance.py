@@ -235,6 +235,11 @@ def test_a_truncated_state_file_is_reported_as_an_error(qmp, tmp_path):
     assert qmp.execute("query-status") is not None
 
 
+# Windows forbids '"' in file names, so these paths cannot be created there.
+needs_quote_in_path = pytest.mark.skipif(
+    sys.platform == "win32", reason="'\"' is not a legal Windows file name character")
+
+
 # A directory name carrying both characters that must be escaped in a JSON
 # string. Both are legal in a POSIX filename, and a Windows path reaches the
 # backslash case without trying.
@@ -254,6 +259,7 @@ def test_an_error_message_containing_a_quote_is_valid_json(qmp, tmp_path):
         f"the path came back mangled: {reply['error']['desc']!r}")
 
 
+@needs_quote_in_path
 def test_a_returned_file_path_containing_a_quote_is_valid_json(qmp, tmp_path):
     """The savestate/loadstate/screendump/memdump replies echo the path back
     into the response the same unescaped way."""
@@ -270,6 +276,7 @@ def test_a_returned_file_path_containing_a_quote_is_valid_json(qmp, tmp_path):
         target)
 
 
+@needs_quote_in_path
 def test_a_screendump_path_containing_a_quote_is_valid_json(qmp, tmp_path):
     """screendump echoes the destination path back too."""
     nasty_dir = tmp_path / NASTY

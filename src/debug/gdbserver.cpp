@@ -17,11 +17,12 @@
  */
 
 #include "dosbox.h"
+#define RDSOCK_IMPL
+#include "rdsock.h"
 
 #if C_REMOTEDEBUG
 
 #include <errno.h>
-#include <netinet/tcp.h>
 #include <stdexcept>
 #include "gdbserver.h"
 #include "debug.h"
@@ -29,23 +30,12 @@
 
 // Helper functions
 
-/* EAGAIN and EWOULDBLOCK are the same value on Linux, so testing both with ||
- * trips -Wlogical-op. They are permitted to differ, so both are still
- * checked, just not in one expression. */
-static inline bool would_block(int err) {
-    if (err == EAGAIN) return true;
-#if EWOULDBLOCK != EAGAIN
-    if (err == EWOULDBLOCK) return true;
-#endif
-    return false;
-}
-
 /* The GDB stub is best-effort on the write side: a short write or a peer that
  * vanished mid-packet is handled by the client timing out and reconnecting,
  * not by retrying here. Swallow the result explicitly so the warning does not
  * hide a real one. */
-static inline void write_ignore(int fd, const void* buf, size_t len) {
-    ssize_t unused = write(fd, buf, len);
+static inline void write_ignore(rd_sock_t fd, const void* buf, size_t len) {
+    rd_ssize_t unused = rd_send(fd, buf, len);
     (void)unused;
 }
 
@@ -61,6 +51,10 @@ void GDBServer::start() {
         LOG(LOG_REMOTE, LOG_WARN)("GDBServer: Already running");
         return;
     }
+    if (!rd_net_init()) {
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: network stack init failed");
+        return;
+    }
     setup_socket();
     running = true;
 }
@@ -72,12 +66,12 @@ void GDBServer::stop() {
     running = false;
 
     if (client_fd >= 0) {
-        close(client_fd);
-        client_fd = -1;
+        rd_close(client_fd);
+        client_fd = RD_BAD_SOCK;
     }
     if (server_fd >= 0) {
-        close(server_fd);
-        server_fd = -1;
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
     }
     recv_buffer.clear();
     /* A new connection is a new session. RSP has no way to resume one,
@@ -91,45 +85,42 @@ void GDBServer::stop() {
 
 void GDBServer::setup_socket() {
     struct sockaddr_in address;
-    int opt = 1;
-
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    server_fd = rd_socket();
     if (server_fd < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: socket failed: %s", strerror(errno));
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: socket failed: %s", rd_error_string(rd_last_error()));
         return;
     }
 
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: setsockopt failed: %s", strerror(errno));
-        close(server_fd);
-        server_fd = -1;
+    if (!rd_set_reuse(server_fd)) {
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: setsockopt failed: %s", rd_error_string(rd_last_error()));
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
     // Set non-blocking
-    int flags = fcntl(server_fd, F_GETFL, 0);
-    fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+    rd_set_nonblocking(server_fd);
 
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
     if (inet_pton(AF_INET, bind_address.c_str(), &address.sin_addr) != 1) {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: invalid gdbserver address '%s'", bind_address.c_str());
-        close(server_fd);
-        server_fd = -1;
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: bind failed: %s", strerror(errno));
-        close(server_fd);
-        server_fd = -1;
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: bind failed: %s", rd_error_string(rd_last_error()));
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
     if (listen(server_fd, 1) < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: listen failed: %s", strerror(errno));
-        close(server_fd);
-        server_fd = -1;
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: listen failed: %s", rd_error_string(rd_last_error()));
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
         return;
     }
 
@@ -142,12 +133,12 @@ bool GDBServer::try_accept() {
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
 
-    int new_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+    rd_sock_t new_fd = rd_accept(server_fd, (struct sockaddr*)&address, &addrlen);
     if (new_fd < 0) {
-        if (would_block(errno)) {
+        if (rd_would_block(rd_last_error())) {
             return false;  // No pending connection
         }
-        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: accept failed: %s", strerror(errno));
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: accept failed: %s", rd_error_string(rd_last_error()));
         return false;
     }
 
@@ -158,8 +149,8 @@ bool GDBServer::try_accept() {
         // == 0xb7. This is the only hand-written packet in the file -- every
         // other reply goes through send_packet(), which computes it.
         const char* error_msg = "$E99#b7";
-        send(new_fd, error_msg, strlen(error_msg), 0);
-        close(new_fd);
+        rd_send(new_fd, error_msg, strlen(error_msg));
+        rd_close(new_fd);
         return false;
     }
 
@@ -169,12 +160,10 @@ bool GDBServer::try_accept() {
      * ~82ms per round-trip with it on, ~41ms with only the client fixed, so
      * both ends have to set it. Cost is per round-trip regardless of size, so
      * it falls entirely on trip count. */
-    int nodelay = 1;
-    setsockopt(new_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    rd_set_nodelay(new_fd);
 
     // Set client socket non-blocking
-    int flags = fcntl(new_fd, F_GETFL, 0);
-    fcntl(new_fd, F_SETFL, flags | O_NONBLOCK);
+    rd_set_nonblocking(new_fd);
 
     client_fd = new_fd;
     recv_buffer.clear();
@@ -202,8 +191,8 @@ GDBAction GDBServer::poll() {
     if (!receive_data()) {
         // Client disconnected
         LOG(LOG_REMOTE, LOG_NORMAL)("GDBServer: Client disconnected");
-        close(client_fd);
-        client_fd = -1;
+        rd_close(client_fd);
+        client_fd = RD_BAD_SOCK;
         recv_buffer.clear();
         /* Session over; the next client starts in ACK mode. See stop(). */
         noack_mode = false;
@@ -227,19 +216,19 @@ GDBAction GDBServer::poll() {
 bool GDBServer::receive_data() {
     char buf[1024];
     while (true) {
-        ssize_t n = read(client_fd, buf, sizeof(buf));
+        rd_ssize_t n = rd_recv(client_fd, buf, sizeof(buf));
         if (n > 0) {
             recv_buffer.append(buf, n);
         } else if (n == 0) {
             // Connection closed
             return false;
         } else {
-            if (would_block(errno)) {
+            if (rd_would_block(rd_last_error())) {
                 // No more data available
                 return true;
             }
             // Real error
-            LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: read error: %s", strerror(errno));
+            LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: read error: %s", rd_error_string(rd_last_error()));
             return false;
         }
     }
@@ -415,8 +404,8 @@ GDBAction GDBServer::process_command(const std::string& cmd) {
         } else if (cmd == "D" || cmd.substr(0, 2) == "D;") {
             LOG(LOG_REMOTE, LOG_NORMAL)("GDBServer: Client detaching");
             send_packet("OK");
-            close(client_fd);
-            client_fd = -1;
+            rd_close(client_fd);
+            client_fd = RD_BAD_SOCK;
             return GDBAction::DISCONNECT;
         } else {
             LOG(LOG_REMOTE, LOG_DEBUG)("GDBServer: Unhandled command: %s", cmd.c_str());

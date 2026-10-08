@@ -1149,11 +1149,11 @@ AC_ARG_ENABLE(debug,AC_HELP_STRING([--enable-debug],[Enable debug mode]),[
 ],)
 
 dnl FEATURE: Remote debugging (GDB server + QMP keyboard input)
-AH_TEMPLATE(C_REMOTEDEBUG,[Define to 1 to enable remote debugging (GDB server, QMP), requires POSIX sockets])
-AC_ARG_ENABLE(remotedebug,AC_HELP_STRING([--enable-remotedebug],[Enable remote debugging servers (Linux/BSD only)]),[
+AH_TEMPLATE(C_REMOTEDEBUG,[Define to 1 to enable remote debugging (GDB server, QMP), requires POSIX sockets or Winsock])
+AC_ARG_ENABLE(remotedebug,AC_HELP_STRING([--enable-remotedebug],[Enable remote debugging servers (Linux/BSD/macOS/Windows)]),[
    if test x$enable_remotedebug = xyes; then
      case "$host" in
-       *-*-linux* | *-*-freebsd* | *-*-dragonfly* | *-*-netbsd* | *-*-openbsd* | *-*-darwin*)
+       *-*-linux* | *-*-freebsd* | *-*-dragonfly* | *-*-netbsd* | *-*-openbsd* | *-*-darwin* | *-*-cygwin* | *-*-msys*)
          AC_CHECK_HEADERS([sys/socket.h netinet/in.h arpa/inet.h], [
            AC_DEFINE(C_REMOTEDEBUG,1)
            AC_MSG_RESULT([Remote debugging enabled])
@@ -1161,8 +1161,16 @@ AC_ARG_ENABLE(remotedebug,AC_HELP_STRING([--enable-remotedebug],[Enable remote d
            AC_MSG_ERROR([Remote debugging requires POSIX socket headers])
          ])
          ;;
+       *-*-mingw*)
+         AC_CHECK_HEADERS([winsock2.h ws2tcpip.h], [
+           AC_DEFINE(C_REMOTEDEBUG,1)
+           AC_MSG_RESULT([Remote debugging enabled])
+         ], [
+           AC_MSG_ERROR([Remote debugging requires Winsock headers])
+         ], [[#include <winsock2.h>]])
+         ;;
        *)
-         AC_MSG_ERROR([Remote debugging is only supported on Linux, BSD, and macOS])
+         AC_MSG_ERROR([Remote debugging is only supported on Linux, BSD, macOS, and Windows])
          ;;
      esac
    else

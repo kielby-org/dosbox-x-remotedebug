@@ -882,6 +882,12 @@
     <ClCompile Include="..\src\debug\debug_mcp.cpp">
       <Filter>Sources\debug</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\debug\gdbserver.cpp">
+      <Filter>Sources\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\debug\qmp.cpp">
+      <Filter>Sources\debug</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\debug\debug_win32.cpp">
       <Filter>Sources\debug</Filter>
     </ClCompile>

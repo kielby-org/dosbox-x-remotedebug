@@ -27,11 +27,7 @@
 #include <cstring>
 #include <sstream>
 #include <iomanip>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
+#include "rdsock.h"
 
 /* The most bytes a single `m` may ask for, and so the ceiling on the length
  * this stub will honour. Before it existed, an unbounded length from the
@@ -67,7 +63,7 @@ public:
     /* address is the IPv4 address to listen on. Neither server
      * authenticates, so callers pass loopback unless told otherwise. */
     GDBServer(int port, const std::string& address = "127.0.0.1")
-        : port(port), bind_address(address), server_fd(-1), client_fd(-1),
+        : port(port), bind_address(address), server_fd(RD_BAD_SOCK), client_fd(RD_BAD_SOCK),
                           running(false), noack_mode(false) {}
     ~GDBServer() { stop(); }
 
@@ -88,8 +84,8 @@ public:
 private:
     int port;
     std::string bind_address;
-    int server_fd;
-    int client_fd;
+    rd_sock_t server_fd;
+    rd_sock_t client_fd;
     bool running;
     bool noack_mode;
     std::string recv_buffer;  // Buffer for partial packet data

@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -22,7 +23,15 @@ from protocol.gdb import RawGDB
 from protocol.qmp import RawQMP
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_EXECUTABLE = REPO_ROOT / "src" / "dosbox-x"
+if sys.platform == "win32":
+    # Visual Studio output; the SDL2 configuration is preferred when both exist.
+    _VS_OUT = REPO_ROOT / "bin" / "x64"
+    DEFAULT_EXECUTABLE = next(
+        (p for p in (_VS_OUT / "Release SDL2" / "dosbox-x.exe",
+                     _VS_OUT / "Release" / "dosbox-x.exe") if p.exists()),
+        _VS_OUT / "Release SDL2" / "dosbox-x.exe")
+else:
+    DEFAULT_EXECUTABLE = REPO_ROOT / "src" / "dosbox-x"
 
 CONF_TEMPLATE = """\
 [sdl]
@@ -145,13 +154,18 @@ class Emulator:
     def _spawn(self) -> None:
         env = dict(os.environ)
         env.setdefault("SDL_VIDEODRIVER", "dummy")
+        # POSIX: own session so stop() can signal the whole process group.
+        # Windows has no sessions or killpg; the emulator is a single process,
+        # so stop() terminates it directly.
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                 if sys.platform == "win32" else {"start_new_session": True})
         self._proc = subprocess.Popen(
             [str(self.executable), "-conf", str(self.conf_path)],
             cwd=str(self.workdir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
             env=env,
+            **group,
         )
         self.pid = self._proc.pid
 
@@ -216,22 +230,39 @@ class Emulator:
                     pass
         self._gdb = self._qmp = None
         if self._proc is not None:
-            try:
-                pgid = os.getpgid(self._proc.pid)
-                os.killpg(pgid, signal.SIGTERM)
-                deadline = time.time() + 5.0
-                while time.time() < deadline and self._proc.poll() is None:
-                    time.sleep(0.05)
-                if self._proc.poll() is None:
-                    os.killpg(pgid, signal.SIGKILL)
-                self._proc.wait(timeout=5.0)
-            except (ProcessLookupError, PermissionError,
-                    subprocess.TimeoutExpired):
-                pass
+            if sys.platform == "win32":
+                self._terminate_windows()
+            else:
+                self._terminate_posix()
             self._proc = None
         if self.workdir is not None and self.workdir.exists():
             # shutil, never a shell `rm -rf`: sandboxes refuse the latter.
             shutil.rmtree(self.workdir, ignore_errors=True)
+
+    def _terminate_posix(self) -> None:
+        try:
+            pgid = os.getpgid(self._proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+            deadline = time.time() + 5.0
+            while time.time() < deadline and self._proc.poll() is None:
+                time.sleep(0.05)
+            if self._proc.poll() is None:
+                os.killpg(pgid, signal.SIGKILL)
+            self._proc.wait(timeout=5.0)
+        except (ProcessLookupError, PermissionError,
+                subprocess.TimeoutExpired):
+            pass
+
+    def _terminate_windows(self) -> None:
+        try:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=5.0)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     # -- clients -----------------------------------------------------------
 

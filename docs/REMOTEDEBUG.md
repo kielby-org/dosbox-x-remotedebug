@@ -7,11 +7,19 @@ DOSBox-X includes remote debugging capabilities for external tools to connect an
 
 ## Building
 
-Remote debugging requires POSIX sockets and is supported on Linux, BSD, and macOS.
+Remote debugging is supported on Linux, BSD, macOS, and Windows.
 
 ```bash
 ./build-debug --enable-remotedebug
 ```
+
+On Windows with Visual Studio it is opt-in through an MSBuild property:
+
+```
+msbuild vs/dosbox-x.sln -p:Configuration="Release SDL2" -p:Platform=x64 -p:RemoteDebug=true
+```
+
+MinGW builds use `--enable-remotedebug` like the POSIX ones.
 
 Or manually:
 ```bash
@@ -740,5 +748,5 @@ See `tests/integration/README.md` for detailed documentation.
 
 ## TODO
 
-- [ ] Windows support (currently POSIX sockets only)
+- [x] Windows support (Winsock, via `include/rdsock.h`)
 - [ ] Hardware breakpoints/watchpoints for GDB server
