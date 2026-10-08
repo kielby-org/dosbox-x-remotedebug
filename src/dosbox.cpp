@@ -483,6 +483,10 @@ static Bitu Normal_Loop(void) {
                 SAVESTATE_CheckPendingRequest();
                 EMULATOR_CheckPendingControl();
                 QMP_ProcessPendingInputEvents();
+                /* A step that ran a callback whose handler ends this RunMachine (CB_STOP of a
+                 * nested real-mode call) returns what the handler returned, as below. */
+                Bitu step_exit = DEBUG_TakeGDBStepExit();
+                if (step_exit > 0) return step_exit;
                 // Step was executed, return to allow loop to be called again
                 return 0;
             }
