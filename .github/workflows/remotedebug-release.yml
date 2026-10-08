@@ -32,6 +32,7 @@ env:
 jobs:
   windows-x64:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,8 +49,8 @@ jobs:
       - name: Integration tests
         shell: bash
         run: |
-          pip install pytest
-          cd tests/integration && python -m pytest -q --tb=short
+          pip install pytest pytest-timeout
+          cd tests/integration && python -m pytest -v --tb=short --timeout=120
       - name: Package
         shell: pwsh
         run: |
@@ -75,6 +76,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -90,8 +92,8 @@ jobs:
         run: ./build-debug-sdl2 --enable-avcodec --enable-remotedebug
       - name: Integration tests
         run: |
-          pip install pytest
-          cd tests/integration && python -m pytest -q --tb=short
+          pip install pytest pytest-timeout
+          cd tests/integration && python -m pytest -v --tb=short --timeout=120
       - name: Package
         run: |
           out="dosbox-x-remotedebug-linux-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
@@ -123,6 +125,7 @@ jobs:
           - arch: arm64
             runner: macos-15
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -138,8 +141,8 @@ jobs:
           make dosbox-x.app
       - name: Integration tests
         run: |
-          pip install pytest
-          cd tests/integration && python -m pytest -q --tb=short
+          pip install pytest pytest-timeout
+          cd tests/integration && python -m pytest -v --tb=short --timeout=120
       - name: Package
         run: |
           out="dosbox-x-remotedebug-macos-${{ matrix.arch }}-${{ inputs.ref || github.ref_name }}"
