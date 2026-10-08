@@ -193,6 +193,10 @@ static void LogBIOSMem(void);
 static GDBServer* gdbServer = nullptr;
 static bool gdb_break_on_exec = false;  // Flag for GDB-aware program execution
 static bool gdb_cpu_paused = false;     // CPU paused waiting for GDB command
+/* What a callback run by a GDB step asked the emulation loop to return: non-zero ends the
+ * DOSBOX_RunMachine() it runs in (CB_STOP, the end of a nested real-mode call). The loop takes it
+ * through DEBUG_TakeGDBStepExit(). */
+static Bitu gdb_step_exit = 0;
 #endif
 
 extern int debuggerrun;
@@ -6828,8 +6832,26 @@ uint32_t DEBUG_GetRegister(int reg) {
             // Execute exactly one instruction
             skipFirstInstruction = true;
             mustCompleteInstruction = true;
-            DEBUG_Run(1, true);
+            int32_t ret = DEBUG_Run(1, true);
             mustCompleteInstruction = false;
+
+            /* The instruction was a callback (the FE 38 stub that starts every DOS and BIOS
+             * handler DOSBox implements): the decoder returns its number, and its handler has to
+             * run as Normal_Loop() would run it, or the step skips the whole call (stepping onto
+             * INT 21h's handler skipped a printf's DOS write). The handler may itself run
+             * real-mode code in a nested DOSBOX_RunMachine() (the console's write calls INT 10h),
+             * which must not stop for GDB, so the pause is lifted while it runs; a breakpoint hit
+             * inside it still stops, and then that stop is the step's reply. */
+            if (ret > 0 && (Bitu)ret < CB_MAX) {
+                extern unsigned int last_callback;
+                unsigned int p_last_callback = last_callback;
+                last_callback = (unsigned int)ret;
+                gdb_cpu_paused = false;
+                Bitu blah = (*CallBack_Handlers[ret])();
+                last_callback = p_last_callback;
+                if (blah > 0) gdb_step_exit = blah;
+                if (gdb_cpu_paused) return true;  // stopped (and replied) inside the handler
+            }
 
             uint32_t eip_after = DEBUG_GetRegister(8);
             LOG(LOG_REMOTE, LOG_NORMAL)("DEBUG: Step completed, EIP=0x%X->0x%X", eip_before, eip_after);
@@ -7026,7 +7048,13 @@ uint32_t DEBUG_GetRegister(int reg) {
      return gdbServer != nullptr && gdbServer->is_running() && gdbServer->has_client();
  }
 
- void DEBUG_SetGDBBreakOnExec(bool enable) {
+ Bitu DEBUG_TakeGDBStepExit() {
+    Bitu exit = gdb_step_exit;
+    gdb_step_exit = 0;
+    return exit;
+}
+
+void DEBUG_SetGDBBreakOnExec(bool enable) {
      gdb_break_on_exec = enable;
      LOG(LOG_REMOTE, LOG_DEBUG)("DEBUG: GDB break on exec %s", enable ? "enabled" : "disabled");
  }

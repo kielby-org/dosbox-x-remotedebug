@@ -72,6 +72,33 @@ def create_test_com_file():
         return None
 
 
+def create_output_com_file():
+    """A COM file that prints X and Y through DOS, one INT 21h each, and exits.
+
+    Stepping across the first INT 21h must not lose the X: the instruction the
+    step lands on in the handler is a DOSBox callback, and the DOS function it
+    runs (here the console write, which itself calls INT 10h) has to run.
+    """
+    TEST_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEST_ASSETS_DIR / "DBXOUT.COM"
+    com_bytes = bytes([
+        0xB4, 0x02,        # MOV AH, 02h (DOS: write the character in DL)
+        0xB2, 0x58,        # MOV DL, 'X'
+        0xCD, 0x21,        # INT 21h          <- stepped across
+        0xB4, 0x02,        # MOV AH, 02h      (offset 0x106)
+        0xB2, 0x59,        # MOV DL, 'Y'
+        0xCD, 0x21,        # INT 21h          <- run
+        0xB8, 0x00, 0x4C,  # MOV AX, 4C00h
+        0xCD, 0x21,        # INT 21h (exit)
+    ])
+    try:
+        path.write_bytes(com_bytes)
+        return path
+    except Exception as e:
+        print(f"Warning: Could not create output COM file: {e}")
+        return None
+
+
 # -- local plumbing: typing text and reading the screen via raw clients --
 #
 # dosbox_debug.py's type_text/screen_line convenience is exactly what
@@ -544,6 +571,45 @@ class TestRemoteDebugIntegration:
         # EDI, EIP.
         for i in range(9):
             assert regs1[i] == regs2[i], f"Register index {i} changed while paused"
+
+
+class TestStepAcrossDosCall:
+    """A GDB single step that enters a DOSBox callback runs its handler."""
+
+    def test_stepping_across_int21_keeps_its_output(self, gdb_t, qmp_t):
+        com_path = create_output_com_file()
+        if com_path is None:
+            pytest.skip("Could not create output COM file")
+
+        _run_command(gdb_t, qmp_t, "T:", wait_after=0.3)
+        _run_command(gdb_t, qmp_t, "DEBUGBOX DBXOUT.COM", wait_after=1.0)
+        gdb_t.halt()
+        _drain_stop(gdb_t)
+        time.sleep(0.2)
+        regs = gdb_t.read_registers()
+        program_cs = regs[CS]
+        assert regs[EIP] == 0x100, f"expected the COM entry, at 0x{regs[EIP]:04X}"
+
+        # MOV AH, MOV DL, then INT 21h into DOSBox's handler, its callback,
+        # its IRET, until execution is back in the program after the INT.
+        for _ in range(12):
+            gdb_t.step()
+            gdb_t.wait_for_stop(timeout=5.0)
+            regs = gdb_t.read_registers()
+            if regs[CS] == program_cs and regs[EIP] == 0x106:
+                break
+        else:
+            pytest.fail("never came back from the stepped INT 21h")
+
+        # Run the rest: Y, then exit to the prompt.
+        gdb_t.cont()
+        time.sleep(1.0)
+        gdb_t.halt()
+        time.sleep(0.2)
+        lines = _screen_text(gdb_t)
+        gdb_t.cont()
+        assert any("XY" in line for line in lines), (
+            f"the stepped INT 21h's X is missing; screen: {lines!r}")
 
 
 # =============================================================================

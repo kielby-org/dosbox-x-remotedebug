@@ -274,6 +274,20 @@ to while it runs freely. Previously none of this ran on the halted path: a
 `send-key` input typed while halted was silently dropped instead of queuing
 for when execution resumed.
 
+### Single Steps Into DOS and BIOS Calls
+
+DOSBox implements DOS and most BIOS services in C++: an `INT 21h` lands on a
+callback, a four-byte `FE 38` stub that runs the service when the CPU
+executes it. A GDB single step (`s`) that lands on such a stub now runs the
+service, as continuing would: stepping across a program's `INT 21h` performs
+the DOS call, and the step stops at the instruction after the stub.
+Previously the step executed the stub but discarded the callback it
+returned, so the service never ran -- a `printf` stepped through lost its
+output -- and a callback that ends a nested real-mode call (the console
+write runs `INT 10h` that way) never ended it. The service runs with the GDB
+pause lifted, because it may run real-mode code itself; a breakpoint hit
+inside it stops there, and that stop is the step's reply.
+
 ### Key Names (QKeyCode)
 
 Standard QEMU key names: `a`-`z`, `0`-`9`, `f1`-`f12`, `ret`, `esc`, `tab`, `spc`, `shift`, `ctrl`, `alt`, `caps_lock`, `left`, `right`, `up`, `down`, `insert`, `delete`, `home`, `end`, `pgup`, `pgdn`, `kp_0`-`kp_9`, etc.
