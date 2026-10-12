@@ -87,8 +87,13 @@ class Emulator:
     TEXT_PAGE_BYTES = 80 * 25 * 2
 
     def __init__(self, executable=None, extra_conf: str = "",
-                 mounts: dict = None, boot_settle: float = 0.5):
+                 mounts: dict = None, boot_settle: float = 0.5,
+                 gdb_port: int = None, qmp_port: int = None):
         self.executable = Path(executable or DEFAULT_EXECUTABLE)
+        # Ports a test insists on (say, one it has already taken); None picks
+        # a free one for each attempt.
+        self._fixed_gdb_port = gdb_port
+        self._fixed_qmp_port = qmp_port
         self.extra_conf = extra_conf
         self.mounts = dict(mounts or {})
         self.boot_settle = boot_settle
@@ -112,9 +117,9 @@ class Emulator:
     # -- setup -------------------------------------------------------------
 
     def _allocate_ports(self) -> None:
-        self.gdb_port = free_port()
-        self.qmp_port = free_port()
-        while self.qmp_port == self.gdb_port:
+        self.gdb_port = self._fixed_gdb_port or free_port()
+        self.qmp_port = self._fixed_qmp_port or free_port()
+        while self.qmp_port == self.gdb_port and not self._fixed_qmp_port:
             self.qmp_port = free_port()
 
     def _write_conf(self) -> None:
