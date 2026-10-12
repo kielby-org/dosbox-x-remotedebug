@@ -46,17 +46,21 @@ static inline uint32_t swap32(uint32_t x) {
             ((x << 24) & 0xff000000));
 }
 
-void GDBServer::start() {
+bool GDBServer::start() {
     if (running) {
         LOG(LOG_REMOTE, LOG_WARN)("GDBServer: Already running");
-        return;
+        return true;
     }
     if (!rd_net_init()) {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: network stack init failed");
-        return;
+        return false;
     }
-    setup_socket();
+    /* Only report running when there is a listening socket. Otherwise
+     * is_running() would claim a server that cannot accept anyone, and the
+     * caller could not tell its start request had failed. */
+    if (!setup_socket()) return false;
     running = true;
+    return true;
 }
 
 void GDBServer::stop() {
@@ -83,19 +87,19 @@ void GDBServer::stop() {
     noack_mode = false;
 }
 
-void GDBServer::setup_socket() {
+bool GDBServer::setup_socket() {
     struct sockaddr_in address;
     server_fd = rd_socket();
     if (server_fd < 0) {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: socket failed: %s", rd_error_string(rd_last_error()));
-        return;
+        return false;
     }
 
     if (!rd_set_reuse(server_fd)) {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: setsockopt failed: %s", rd_error_string(rd_last_error()));
         rd_close(server_fd);
         server_fd = RD_BAD_SOCK;
-        return;
+        return false;
     }
 
     // Set non-blocking
@@ -107,24 +111,25 @@ void GDBServer::setup_socket() {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: invalid gdbserver address '%s'", bind_address.c_str());
         rd_close(server_fd);
         server_fd = RD_BAD_SOCK;
-        return;
+        return false;
     }
 
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: bind failed: %s", rd_error_string(rd_last_error()));
+        LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: cannot listen on %s:%d: %s", bind_address.c_str(), port, rd_error_string(rd_last_error()));
         rd_close(server_fd);
         server_fd = RD_BAD_SOCK;
-        return;
+        return false;
     }
 
     if (listen(server_fd, 1) < 0) {
         LOG(LOG_REMOTE, LOG_ERROR)("GDBServer: listen failed: %s", rd_error_string(rd_last_error()));
         rd_close(server_fd);
         server_fd = RD_BAD_SOCK;
-        return;
+        return false;
     }
 
     LOG(LOG_REMOTE, LOG_NORMAL)("GDBServer: Listening on %s:%d", bind_address.c_str(), port);
+    return true;
 }
 
 bool GDBServer::try_accept() {

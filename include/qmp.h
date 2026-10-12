@@ -63,9 +63,9 @@ public:
         : port(port), bind_address(address), server_fd(RD_BAD_SOCK), client_fd(RD_BAD_SOCK), running(false) {}
     ~QMPServer() { stop(); }
 
-    void start();  // Start server in a new thread
+    bool start();  // Listen, then serve in a new thread; false if it could not listen
     void run();    // Main server loop (called by thread)
-    void stop();   // Stop server and wait for thread to exit
+    void stop();   // Ask the thread to finish and wait for it
     bool is_running() const { return running.load(); }
 
     // Process pending input events (called from main thread)
@@ -74,6 +74,16 @@ public:
 private:
     int port;
     std::string bind_address;
+    /* How long the server thread blocks waiting for a connection or for data
+     * before it looks at `running` again. It bounds how long stop() takes. */
+    static const int POLL_INTERVAL_MS = 100;
+    /* How long a send may stall on a client that has stopped reading. */
+    static const int SEND_TIMEOUT_MS = 5000;
+    /* Both sockets belong to the server thread: start() creates the listener
+     * before the thread exists, and from then on only run() and what it calls
+     * touch them. stop() never closes them from another thread; it clears
+     * `running` and joins, and the thread closes its own sockets on the way
+     * out. */
     rd_sock_t server_fd, client_fd;
     std::atomic<bool> running{false};
     std::thread server_thread;
@@ -86,8 +96,10 @@ private:
     void queue_input_event(const QMPInputEvent& event);
 
     // Socket operations
-    void setup_socket();
-    void wait_for_client();
+    bool setup_socket();
+    void close_client();
+    void close_sockets();
+    bool wait_for_client();     // true when a client was accepted
     void handle_client();
 
     // Protocol handling
@@ -137,7 +149,7 @@ private:
 };
 
 // Public interface for debug.cpp
-void QMP_StartServer(int port, const std::string& address);
+bool QMP_StartServer(int port, const std::string& address);  // false if it could not listen
 void QMP_StopServer();
 bool QMP_IsServerRunning();
 void QMP_ProcessPendingInputEvents();

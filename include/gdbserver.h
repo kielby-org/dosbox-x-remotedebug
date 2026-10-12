@@ -68,7 +68,7 @@ public:
     ~GDBServer() { stop(); }
 
     // Lifecycle
-    void start();           // Setup listening socket (non-blocking)
+    bool start();           // Setup listening socket (non-blocking); false if it could not listen
     void stop();            // Close all sockets
 
     // Called from debug loop
@@ -91,7 +91,7 @@ private:
     std::string recv_buffer;  // Buffer for partial packet data
 
     // Socket setup
-    void setup_socket();
+    bool setup_socket();
     bool try_accept();      // Non-blocking accept, returns true if new client
 
     // Packet I/O (non-blocking)

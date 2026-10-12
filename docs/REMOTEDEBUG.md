@@ -51,6 +51,11 @@ qmpserver port=4444
 
 Servers can be toggled at runtime via **Debug > GDB Server** and **Debug > QMP Server** menus.
 
+If a server cannot listen (for example because another DOSBox-X session already uses the port), the
+emulator keeps running, the other server is unaffected, and the failure is logged once as
+`cannot listen on <address>:<port>: <reason>`. The menu item stays unchecked and the `gdbserver` /
+`qmpserver` setting is not switched on. Give concurrent sessions different ports.
+
 ### Logging
 
 Control remote debugging verbosity via the `[log]` section:

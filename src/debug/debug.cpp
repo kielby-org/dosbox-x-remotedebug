@@ -6211,14 +6211,16 @@ void DEBUG_Init() {
     if (section) {
         bool gdbserver_enabled = section->Get_bool("gdbserver");
         int gdbserver_port = section->Get_int("gdbserver port");
-        if (gdbserver_enabled) {
-            DEBUG_StartGDBServer(gdbserver_port, section->Get_string("gdbserver address"));
+        if (gdbserver_enabled &&
+            !DEBUG_StartGDBServer(gdbserver_port, section->Get_string("gdbserver address"))) {
+            LOG_MSG("GDB server could not start on port %d (see the log for the reason)", gdbserver_port);
         }
 
         bool qmp_enabled = section->Get_bool("qmpserver");
         int qmp_port = section->Get_int("qmpserver port");
-        if (qmp_enabled) {
-            DEBUG_StartQMPServer(qmp_port, section->Get_string("qmpserver address"));
+        if (qmp_enabled &&
+            !DEBUG_StartQMPServer(qmp_port, section->Get_string("qmpserver address"))) {
+            LOG_MSG("QMP server could not start on port %d (see the log for the reason)", qmp_port);
         }
     }
     /* Update menu checkmarks to reflect server state */
@@ -6958,10 +6960,10 @@ uint32_t DEBUG_GetRegister(int reg) {
 
 #if C_REMOTEDEBUG
  // GDB server start/stop functions
- void DEBUG_StartGDBServer(int port, const char* address) {
+ bool DEBUG_StartGDBServer(int port, const char* address) {
      if (gdbServer != nullptr && gdbServer->is_running()) {
          DEBUG_ShowMsg("GDBServer: Already running");
-         return;
+         return true;
      }
 
      if (gdbServer != nullptr) {
@@ -6969,7 +6971,12 @@ uint32_t DEBUG_GetRegister(int reg) {
      }
 
      gdbServer = new GDBServer(port, address);
-     gdbServer->start();
+     if (!gdbServer->start()) {
+         delete gdbServer;
+         gdbServer = nullptr;
+         return false;
+     }
+     return true;
  }
 
  void DEBUG_StopGDBServer() {
@@ -6984,8 +6991,8 @@ uint32_t DEBUG_GetRegister(int reg) {
      return gdbServer != nullptr && gdbServer->is_running();
  }
 
- void DEBUG_StartQMPServer(int port, const char* address) {
-     QMP_StartServer(port, address);
+ bool DEBUG_StartQMPServer(int port, const char* address) {
+     return QMP_StartServer(port, address);
  }
 
  void DEBUG_StopQMPServer() {

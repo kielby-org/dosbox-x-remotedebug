@@ -52,6 +52,7 @@ typedef ssize_t rd_ssize_t;
 # include <arpa/inet.h>
 # include <unistd.h>
 # include <fcntl.h>
+# include <poll.h>
 #endif
 
 /* One-time network stack init. A no-op off Windows. Safe to call repeatedly. */
@@ -141,14 +142,40 @@ static inline void rd_shutdown(rd_sock_t s) {
 #endif
 }
 
-static inline bool rd_set_nonblocking(rd_sock_t s) {
+/* Switch a socket between blocking and non-blocking mode. Accepted sockets
+ * can inherit the listener's mode (BSD and macOS do), so set the mode you want
+ * explicitly rather than relying on the default. */
+static inline bool rd_set_nonblocking(rd_sock_t s, bool on = true) {
 #ifdef WIN32
-    u_long on = 1;
-    return ioctlsocket((SOCKET)s, FIONBIO, &on) == 0;
+    u_long mode = on ? 1 : 0;
+    return ioctlsocket((SOCKET)s, FIONBIO, &mode) == 0;
 #else
     int flags = fcntl(s, F_GETFL, 0);
     if (flags < 0) return false;
-    return fcntl(s, F_SETFL, flags | O_NONBLOCK) == 0;
+    return fcntl(s, F_SETFL, on ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) == 0;
+#endif
+}
+
+/* Wait until the socket is readable (for a listener: a connection is pending),
+ * at most timeout_ms. Returns >0 when readable or hung up, 0 on timeout or when
+ * interrupted by a signal, <0 on error. This is how a thread that owns a
+ * socket stays responsive to a stop request without anyone closing the socket
+ * out from under it. */
+static inline int rd_wait_readable(rd_sock_t s, int timeout_ms) {
+#ifdef WIN32
+    WSAPOLLFD pfd;
+    pfd.fd = (SOCKET)s;
+    pfd.events = POLLRDNORM;
+    pfd.revents = 0;
+    return WSAPoll(&pfd, 1, timeout_ms);
+#else
+    struct pollfd pfd;
+    pfd.fd = s;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int ready = poll(&pfd, 1, timeout_ms);
+    if (ready < 0 && errno == EINTR) return 0;
+    return ready;
 #endif
 }
 
@@ -196,6 +223,33 @@ static inline rd_ssize_t rd_send(rd_sock_t s, const void* buf, size_t len) {
 #else
     return send(s, buf, len, 0);
 #endif
+}
+
+/* Bound how long a blocking send may stall on a peer that has stopped
+ * reading, so a stuck client cannot hold the thread that serves it forever. */
+static inline void rd_set_send_timeout(rd_sock_t s, int timeout_ms) {
+#ifdef WIN32
+    DWORD ms = (DWORD)timeout_ms;
+    setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof(ms));
+#else
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+}
+
+/* send() may write less than asked, so loop until everything is out. Returns
+ * false if the peer went away or the send timed out part-way. */
+static inline bool rd_send_all(rd_sock_t s, const void* buf, size_t len) {
+    const char* p = static_cast<const char*>(buf);
+    while (len > 0) {
+        rd_ssize_t n = rd_send(s, p, len);
+        if (n <= 0) return false;
+        p += n;
+        len -= (size_t)n;
+    }
+    return true;
 }
 
 #endif /* RDSOCK_IMPL */

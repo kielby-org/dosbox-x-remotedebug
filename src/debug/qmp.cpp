@@ -332,105 +332,133 @@ std::vector<std::string> QMPServer::extract_array(const std::string& json, const
     return result;
 }
 
-void QMPServer::start() {
+bool QMPServer::start() {
     if (running.load()) {
         LOG(LOG_REMOTE, LOG_WARN)("QMP: Server already running");
-        return;
+        return true;
     }
-    // Set running before spawning thread so is_running() returns true immediately
     if (!rd_net_init()) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: network stack init failed");
-        return;
+        return false;
     }
+    /* Listen here, before the thread exists, so a port that is taken is
+     * reported to the caller instead of leaving a thread with nothing to
+     * serve. is_running() is true as soon as start() returns true. */
+    if (!setup_socket()) return false;
     running.store(true);
     server_thread = std::thread(&QMPServer::run, this);
+    return true;
 }
 
 void QMPServer::run() {
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Starting server...");
-    setup_socket();
 
     while (running.load()) {
-        wait_for_client();
-        if (running.load() && client_fd != -1) {
+        if (wait_for_client()) {
             handle_client();
         }
     }
+    close_sockets();
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Server stopped");
 }
 
 void QMPServer::stop() {
-    if (!running.load()) return;
-    running.store(false);
-    LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Stopping server...");
-    // Use shutdown to unblock any blocking recv/accept calls
-    if (client_fd != -1) {
-        rd_shutdown(client_fd);
-        rd_close(client_fd);
-        client_fd = RD_BAD_SOCK;
+    if (running.exchange(false)) {
+        LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Stopping server...");
     }
-    if (server_fd != -1) {
-        rd_shutdown(server_fd);
-        rd_close(server_fd);
-        server_fd = RD_BAD_SOCK;
-    }
-    // Wait for server thread to finish
+    /* Join even when `running` was already cleared: run() clears it itself if
+     * the listener fails, and destroying a joinable std::thread terminates the
+     * process. */
     if (server_thread.joinable()) {
         server_thread.join();
     }
+    // A start() that failed after creating the listener never reached run().
+    close_sockets();
 }
 
-void QMPServer::setup_socket() {
+void QMPServer::close_client() {
+    if (client_fd != RD_BAD_SOCK) {
+        rd_close(client_fd);
+        client_fd = RD_BAD_SOCK;
+    }
+}
+
+void QMPServer::close_sockets() {
+    close_client();
+    if (server_fd != RD_BAD_SOCK) {
+        rd_close(server_fd);
+        server_fd = RD_BAD_SOCK;
+    }
+}
+
+bool QMPServer::setup_socket() {
     struct sockaddr_in address;
     if ((server_fd = rd_socket()) == RD_BAD_SOCK) {
-        LOG(LOG_REMOTE, LOG_ERROR)("QMP: socket failed");
-        return;
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: socket failed: %s", rd_error_string(rd_last_error()));
+        return false;
     }
 
     if (!rd_set_reuse(server_fd)) {
-        LOG(LOG_REMOTE, LOG_ERROR)("QMP: setsockopt failed");
-        rd_close(server_fd);
-        server_fd = RD_BAD_SOCK;
-        return;
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: setsockopt failed: %s", rd_error_string(rd_last_error()));
+        close_sockets();
+        return false;
     }
 
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
     if (inet_pton(AF_INET, bind_address.c_str(), &address.sin_addr) != 1) {
         LOG(LOG_REMOTE, LOG_ERROR)("QMP: invalid qmpserver address '%s'", bind_address.c_str());
-        rd_close(server_fd);
-        server_fd = RD_BAD_SOCK;
-        return;
+        close_sockets();
+        return false;
     }
 
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("QMP: bind failed on port %d", port);
-        rd_close(server_fd);
-        server_fd = RD_BAD_SOCK;
-        return;
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: cannot listen on %s:%d: %s", bind_address.c_str(), port, rd_error_string(rd_last_error()));
+        close_sockets();
+        return false;
     }
 
     if (listen(server_fd, 1) < 0) {
-        LOG(LOG_REMOTE, LOG_ERROR)("QMP: listen failed");
-        rd_close(server_fd);
-        server_fd = RD_BAD_SOCK;
-        return;
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: listen failed: %s", rd_error_string(rd_last_error()));
+        close_sockets();
+        return false;
     }
 
+    /* Non-blocking, so an accept() after poll() reports a connection cannot
+     * block if that connection is gone again by then. */
+    rd_set_nonblocking(server_fd);
+
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Listening on %s:%d", bind_address.c_str(), port);
+    return true;
 }
 
-void QMPServer::wait_for_client() {
+bool QMPServer::wait_for_client() {
+    int ready = rd_wait_readable(server_fd, POLL_INTERVAL_MS);
+    if (ready < 0) {
+        LOG(LOG_REMOTE, LOG_ERROR)("QMP: waiting for a client failed: %s", rd_error_string(rd_last_error()));
+        running.store(false);
+        return false;
+    }
+    if (ready == 0) return false;  // idle: go round and check `running`
+
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
 
     client_fd = rd_accept(server_fd, (struct sockaddr *)&address, &addrlen);
-    if (client_fd < 0) {
-        if (running.load()) {
-            LOG(LOG_REMOTE, LOG_ERROR)("QMP: accept failed");
+    if (client_fd == RD_BAD_SOCK) {
+        int err = rd_last_error();
+        if (!rd_would_block(err)) {
+            LOG(LOG_REMOTE, LOG_WARN)("QMP: accept failed: %s", rd_error_string(err));
+            /* A persistent failure (out of descriptors, say) would otherwise
+             * make poll() return at once forever; pace the retries. */
+            std::this_thread::sleep_for(std::chrono::milliseconds(POLL_INTERVAL_MS));
         }
-        return;
+        return false;
     }
+    // Replies can be large (memdump), so the client socket blocks; but a client
+    // that stops reading must not hold this thread, and stop(), forever.
+    rd_set_nonblocking(client_fd, false);
+    rd_set_send_timeout(client_fd, SEND_TIMEOUT_MS);
     /* The RSP is strictly request/response with tiny packets, which is the
      * workload Nagle punishes worst: each side holds a small write waiting for
      * an ACK the peer has delayed, costing ~40ms per direction. Measured
@@ -440,12 +468,13 @@ void QMPServer::wait_for_client() {
     rd_set_nodelay(client_fd);
 
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Client connected");
+    return true;
 }
 
 void QMPServer::handle_client() {
     send_greeting();
 
-    while (running.load() && client_fd != -1) {
+    while (running.load() && client_fd != RD_BAD_SOCK) {
         std::string cmd = receive_command();
         if (cmd.empty()) {
             break;
@@ -453,10 +482,7 @@ void QMPServer::handle_client() {
         process_command(cmd);
     }
 
-    if (client_fd != -1) {
-        rd_close(client_fd);
-        client_fd = RD_BAD_SOCK;
-    }
+    close_client();
     LOG(LOG_REMOTE, LOG_NORMAL)("QMP: Client disconnected");
 }
 
@@ -476,8 +502,8 @@ void QMPServer::send_greeting() {
 }
 
 void QMPServer::send_response(const std::string& response) {
-    if (client_fd != -1) {
-        rd_send(client_fd, response.c_str(), response.length());
+    if (client_fd != RD_BAD_SOCK) {
+        rd_send_all(client_fd, response.c_str(), response.length());
     }
 }
 
@@ -496,6 +522,10 @@ std::string QMPServer::receive_command() {
     std::string cmd;
 
     while (running.load()) {
+        int ready = rd_wait_readable(client_fd, POLL_INTERVAL_MS);
+        if (ready < 0) return "";
+        if (ready == 0) continue;  // idle: check `running` again
+
         rd_ssize_t bytes = rd_recv(client_fd, buffer, sizeof(buffer) - 1);
         if (bytes <= 0) {
             return "";
@@ -1307,14 +1337,21 @@ void QMPServer::handle_debug_break_on_exec(const std::string& cmd) {
 }
 
 // Public interface
-void QMP_StartServer(int port, const std::string& address) {
+bool QMP_StartServer(int port, const std::string& address) {
     if (qmpServer != nullptr) {
         LOG(LOG_REMOTE, LOG_WARN)("QMP: Server already running");
-        return;
+        return true;
     }
 
     qmpServer = new QMPServer(port, address);
-    qmpServer->start();
+    if (!qmpServer->start()) {
+        /* Don't keep a server that is not running: the next request would be
+         * told it is "already running" and never try again. */
+        delete qmpServer;
+        qmpServer = nullptr;
+        return false;
+    }
+    return true;
 }
 
 void QMP_StopServer() {
