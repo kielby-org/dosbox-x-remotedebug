@@ -46,6 +46,11 @@ def test_the_spaceless_option_names_are_silently_ignored(tmp_path):
     emu.workdir = tmp_path
     conf = tmp_path / "bad.conf"
     conf.write_text(
+        # Software output, as the launcher's own conf uses: asked for its
+        # default, the emulator first tries to create an OpenGL context, which
+        # is slow to fail on a CI runner with no GPU.
+        "[sdl]\n"
+        "output = surface\n"
         "[dosbox]\n"
         "quit warning = false\n"
         "gdbserver = true\n"
@@ -60,7 +65,7 @@ def test_the_spaceless_option_names_are_silently_ignored(tmp_path):
         emu._spawn()
         # The emulator comes up on 2159/4444, not on what was requested.
         import time
-        deadline = time.time() + 15.0
+        deadline = time.time() + Emulator.START_TIMEOUT
         while time.time() < deadline and not port_is_listening(2159):
             time.sleep(0.1)
         log = tmp_path / "server.log"
