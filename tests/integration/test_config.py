@@ -65,11 +65,18 @@ def test_the_spaceless_option_names_are_silently_ignored(tmp_path):
         emu._spawn()
         # The emulator comes up on 2159/4444, not on what was requested.
         import time
+        # Probe until it answers, and keep that answer. The GDB server takes
+        # one client and only accepts once the emulator's main loop is running,
+        # so a second probe straight after the first can find the backlog full
+        # and time out, which says nothing about whether it is listening.
         deadline = time.time() + Emulator.START_TIMEOUT
-        while time.time() < deadline and not port_is_listening(2159):
-            time.sleep(0.1)
+        listening = False
+        while time.time() < deadline and not listening:
+            listening = port_is_listening(2159)
+            if not listening:
+                time.sleep(0.1)
         log = tmp_path / "server.log"
-        assert port_is_listening(2159), (
+        assert listening, (
             "expected the ignored option to leave the server on its default "
             "port; if this fails the option names may have been fixed\n"
             "emulator log:\n" + (log.read_text(errors="replace")
