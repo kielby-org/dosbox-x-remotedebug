@@ -52,6 +52,8 @@ def test_the_spaceless_option_names_are_silently_ignored(tmp_path):
         f"gdbport = {requested}\n"
         "qmpserver = true\n"
         f"qmpport = {emu.qmp_port}\n"
+        "[log]\n"
+        f"logfile = {tmp_path / 'server.log'}\n"
     )
     emu.conf_path = conf
     try:
@@ -61,9 +63,12 @@ def test_the_spaceless_option_names_are_silently_ignored(tmp_path):
         deadline = time.time() + 15.0
         while time.time() < deadline and not port_is_listening(2159):
             time.sleep(0.1)
+        log = tmp_path / "server.log"
         assert port_is_listening(2159), (
             "expected the ignored option to leave the server on its default "
-            "port; if this fails the option names may have been fixed")
+            "port; if this fails the option names may have been fixed\n"
+            "emulator log:\n" + (log.read_text(errors="replace")
+                                 if log.exists() else "<none>"))
         assert not port_is_listening(requested)
     finally:
         emu.stop()
