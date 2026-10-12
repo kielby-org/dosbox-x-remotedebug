@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.1...remotedebug-v0.1.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **remotedebug:** report a port that cannot be listened on instead of spinning ([958ffca](https://github.com/kielby-org/dosbox-x-remotedebug/commit/958ffca5a8fcdf73c515ddd21935246a40c5e759))
+
 ## [0.1.1](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.0...remotedebug-v0.1.1) (2026-10-08)
 
 
