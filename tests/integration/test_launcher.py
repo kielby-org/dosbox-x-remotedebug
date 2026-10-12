@@ -7,7 +7,6 @@
 # ///
 """The launcher must isolate itself and clean up after itself."""
 
-import os
 import socket
 import sys
 from pathlib import Path
@@ -45,12 +44,14 @@ def test_ports_are_not_the_stock_defaults():
 
 def test_start_and_stop_leaves_no_process_and_no_workdir(emulator):
     workdir = emulator.workdir
-    pid = emulator.pid
     assert workdir.exists()
+    assert emulator.exit_code is None
     emulator.stop()
     assert not workdir.exists()
-    with pytest.raises(OSError):
-        os.kill(pid, 0)
+    # Ask the process handle, not the PID: os.kill(pid, 0) is a harmless probe
+    # on POSIX but terminates whatever owns that PID on Windows, where PIDs are
+    # reused quickly.
+    assert emulator.exit_code is not None
 
 
 def test_conf_uses_the_spaced_option_names(emulator):

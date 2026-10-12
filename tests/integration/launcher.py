@@ -100,6 +100,8 @@ class Emulator:
         self.gdb_port = None
         self.qmp_port = None
         self.pid = None
+        # The emulator's exit status once stop() has ended it; None before.
+        self.exit_code = None
         self.workdir = None
         self.conf_path = None
         self._proc = None
@@ -239,6 +241,7 @@ class Emulator:
                 self._terminate_windows()
             else:
                 self._terminate_posix()
+            self.exit_code = self._proc.poll()
             self._proc = None
         if self.workdir is not None and self.workdir.exists():
             # shutil, never a shell `rm -rf`: sandboxes refuse the latter.
