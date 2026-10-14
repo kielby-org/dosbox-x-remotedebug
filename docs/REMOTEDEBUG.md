@@ -5,6 +5,29 @@ DOSBox-X includes remote debugging capabilities for external tools to connect an
 - **GDB Server** - Debug DOS programs using GDB or compatible debuggers
 - **QMP Server** - Inject keyboard input using QEMU Monitor Protocol
 
+## Using a release
+
+Prebuilt packages are attached to each [release](https://github.com/kielby-org/dosbox-x-remotedebug/releases)
+(tags `remotedebug-vX.Y.Z`) for Windows x64, Linux x86_64 and arm64, and macOS x86_64 and arm64. They
+are portable: unpack one anywhere and run `dosbox-x` from it; nothing is installed and nothing outside the
+folder is changed except the per-user config DOSBox-X writes on first run.
+
+```bash
+gh release download remotedebug-v0.1.3 -R kielby-org/dosbox-x-remotedebug -p '*linux-arm64*' -p SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+Pin a tag rather than following the latest release. Each package is the one the CI built and ran the
+integration tests against, on that platform.
+
+- **Windows** builds need Windows 7 or later. The exe is unsigned, so SmartScreen may warn on a file
+  downloaded in a browser.
+- **macOS** builds are unsigned. A package downloaded in a browser carries the quarantine flag; clear it with
+  `xattr -dr com.apple.quarantine dosbox-x.app`. A download made with `gh` or `curl` is not flagged.
+- **Starting it from a tool:** always pass `-conf <file>` with `gdbserver`/`qmpserver` set (see
+  [Configuration](#configuration)). Without it DOSBox-X may stop to ask you for a working folder, which blocks a
+  headless start. Give concurrent sessions different ports; see below for what happens when one is taken.
+
 ## Building
 
 Remote debugging is supported on Linux, BSD, macOS, and Windows.
