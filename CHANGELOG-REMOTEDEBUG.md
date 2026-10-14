@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.2...remotedebug-v0.1.3) (2026-10-14)
+
+
+### Bug Fixes
+
+* **remotedebug:** make screendump wait for the screenshot to be written ([2935651](https://github.com/kielby-org/dosbox-x-remotedebug/commit/29356513ec9fb0cf3f1d15e3a01d4170cb47bfa3))
+
 ## [0.1.2](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.1...remotedebug-v0.1.2) (2026-10-12)
 
 
