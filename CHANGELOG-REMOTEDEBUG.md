@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.3...remotedebug-v0.1.4) (2026-10-14)
+
+
+### Documentation
+
+* **remotedebug:** how to use a release ([141bab7](https://github.com/kielby-org/dosbox-x-remotedebug/commit/141bab79d308f704d46eddcc0475995533582e54))
+
 ## [0.1.3](https://github.com/kielby-org/dosbox-x-remotedebug/compare/remotedebug-v0.1.2...remotedebug-v0.1.3) (2026-10-14)
 
 
