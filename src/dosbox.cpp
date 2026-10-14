@@ -57,6 +57,7 @@
 #endif // defined(C_DEBUG) && defined(C_DOSBOX_AGENT)
 #include "debug.h"
 #if C_REMOTEDEBUG
+#include "hardware.h"
 #include "qmp.h"
 #endif
 #include "cpu.h"
@@ -483,6 +484,7 @@ static Bitu Normal_Loop(void) {
                 SAVESTATE_CheckPendingRequest();
                 EMULATOR_CheckPendingControl();
                 QMP_ProcessPendingInputEvents();
+                CAPTURE_PollScreenshotRequest();
                 /* A step that ran a callback whose handler ends this RunMachine (CB_STOP of a
                  * nested real-mode call) returns what the handler returned, as below. */
                 Bitu step_exit = DEBUG_TakeGDBStepExit();
@@ -496,6 +498,8 @@ static Bitu Normal_Loop(void) {
             EMULATOR_CheckPendingControl();
             // Process pending QMP input events (keyboard, mouse) - thread-safe queue
             QMP_ProcessPendingInputEvents();
+            // Start a screenshot requested over QMP; it is written on the next frame
+            CAPTURE_PollScreenshotRequest();
 #endif
 #if defined(C_DEBUG) && defined(C_DOSBOX_AGENT)
             dosbox_agent::AGENT_BridgePump();

@@ -147,6 +147,24 @@ def test_screendump_returns_png_data(qmp, tmp_path):
     assert result["size"] > 0
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_END = b"IEND\xaeB`\x82"  # the last chunk of every PNG, with its CRC
+SCREENDUMP_REPEATS = 15
+
+
+def test_every_screendump_in_a_row_is_a_complete_png(qmp, tmp_path):
+    """screendump used to return as soon as the capture had begun, then read
+    the saved path after a fixed 50ms. On a busy host the path was not set yet
+    ("no file created") or the PNG was still being written, so the copy came
+    back truncated. Each reply must now mean the whole file is on disk."""
+    for i in range(SCREENDUMP_REPEATS):
+        target = tmp_path / f"shot{i}.png"
+        qmp.execute("screendump", {"file": str(target)})
+        data = target.read_bytes()
+        assert data.startswith(PNG_SIGNATURE), f"shot {i} is not a PNG"
+        assert data.endswith(PNG_END), f"shot {i} was cut short ({len(data)} bytes)"
+
+
 def test_savestate_then_loadstate_round_trips(qmp, tmp_path):
     """loadstate has no dispatch coverage unless a save exists first --
     write one instead of skipping the loadstate command entirely."""

@@ -59,7 +59,15 @@ void CAPTURE_VideoStart();
 void CAPTURE_VideoStop();
 
 // Screenshot API for remote debugging
-void CAPTURE_TakeScreenshot();               // Trigger screenshot capture
-bool CAPTURE_IsScreenshotPending();          // Returns true if screenshot is in progress
-std::string CAPTURE_GetLastScreenshotPath(); // Get path of last screenshot (clears after read)
-void CAPTURE_ClearLastScreenshotPath();      // Clear the last screenshot path
+enum class ScreenshotResult {
+    OK,         // the screenshot was written; the path is set
+    FAILED,     // the capture ran but wrote no file
+    TIMEOUT,    // no frame was captured in time (the emulator may be halted)
+    BUSY        // an earlier request is still in flight
+};
+/* Ask the emulation thread for a screenshot and wait until it has been
+ * written. Meant for another thread (the QMP server); on OK, `path` is the
+ * PNG that was written. */
+ScreenshotResult CAPTURE_RequestScreenshot(std::string& path, int timeout_ms);
+/* Called from the emulation thread's main loop: starts a requested screenshot. */
+void CAPTURE_PollScreenshotRequest();

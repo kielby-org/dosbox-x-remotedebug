@@ -21,6 +21,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <limits.h>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <vector>
 
 #include "bitmapinfoheader.h"
@@ -72,7 +76,53 @@ extern "C" {
 bool video_debug_overlay = false;
 bool skip_encoding_unchanged_frames = false, show_recorded_filename = true;
 std::string pathvid = "", pathwav = "", pathmtw = "", pathmid = "", pathopl = "", pathscr = "", pathprt = "", pathpcap = "";
-static std::string last_screenshot_path = "";  // Persists after pathscr is cleared, for remote debugging
+
+/* A screenshot asked for from another thread (the QMP server). The capture
+ * itself happens on the emulation thread, when the next frame is rendered, so
+ * the two threads hand it over explicitly: the requester waits on a condition
+ * variable until the emulation thread says the file is written (or that the
+ * capture failed). Nothing here is read without the lock, which is what the
+ * old pending-flag-plus-path design got wrong: the flag cleared when the
+ * capture began, and the requester then read a path that was not set yet. */
+namespace {
+struct ScreenshotRequest {
+	enum State {
+		IDLE,
+		REQUESTED,   // asked for, not yet started by the emulation thread
+		CAPTURING,   // the emulation thread is writing the file
+		DONE,        // finished; `ok` and `path` hold the outcome
+		ABANDONED    // the requester gave up while it was capturing
+	};
+	std::mutex lock;
+	std::condition_variable finished;
+	State state = IDLE;
+	bool ok = false;
+	std::string path;
+	// Lets the emulation thread's per-iteration poll skip the lock when idle.
+	std::atomic<bool> wanted{false};
+};
+ScreenshotRequest screenshot_request;
+
+/* Called when a capture ends; an empty path means it failed. */
+void screenshot_finished(const std::string& path) {
+	std::lock_guard<std::mutex> guard(screenshot_request.lock);
+	if (screenshot_request.state == ScreenshotRequest::CAPTURING) {
+		screenshot_request.ok = !path.empty();
+		screenshot_request.path = path;
+		screenshot_request.state = ScreenshotRequest::DONE;
+		screenshot_request.finished.notify_all();
+	} else if (screenshot_request.state == ScreenshotRequest::ABANDONED) {
+		screenshot_request.state = ScreenshotRequest::IDLE;
+	}
+}
+
+/* Reports the outcome of a capture however its code path ends, including the
+ * early exits taken when a file or PNG structure cannot be created. */
+struct ScreenshotOutcome {
+	std::string path;
+	~ScreenshotOutcome() { screenshot_finished(path); }
+};
+}
 bool systemmessagebox(char const * aTitle, char const * aMessage, char const * aDialogType, char const * aIconType, int aDefaultButton);
 extern std::string working_dir;
 
@@ -826,6 +876,7 @@ void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags,
 		png_color palette[256];
 
 		CaptureState &= ~((unsigned int)CAPTURE_IMAGE);
+		ScreenshotOutcome outcome;
 		/* Open the actual file */
 		FILE * fp=OpenCaptureFile("Screenshot",".png");
 		if (!fp) goto skip_shot;
@@ -988,8 +1039,8 @@ void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags,
 		fclose(fp);
 		if (show_recorded_filename && pathscr.size()) systemmessagebox("Recording completed",("Saved screenshot to the file:\n\n"+pathscr).c_str(),"ok", "info", 1);
 
-		// Save path for remote debugging before clearing
-		if (pathscr.size()) last_screenshot_path = pathscr;
+		// Report the saved path to a remote request, if there is one
+		outcome.path = pathscr;
 	}
 	pathscr = "";
 skip_shot:
@@ -1657,28 +1708,48 @@ void CAPTURE_RawScreenShotEvent(bool pressed) {
 #endif
 
 // Screenshot API for remote debugging (QMP)
-void CAPTURE_TakeScreenshot() {
+ScreenshotResult CAPTURE_RequestScreenshot(std::string& path, int timeout_ms) {
 #if (C_SSHOT) && !defined(C_EMSCRIPTEN)
-	CaptureState |= CAPTURE_IMAGE;
-#endif
-}
+	ScreenshotRequest& request = screenshot_request;
+	std::unique_lock<std::mutex> guard(request.lock);
+	if (request.state != ScreenshotRequest::IDLE)
+		return ScreenshotResult::BUSY;
 
-bool CAPTURE_IsScreenshotPending() {
-#if (C_SSHOT) && !defined(C_EMSCRIPTEN)
-	return (CaptureState & CAPTURE_IMAGE) != 0;
+	request.state = ScreenshotRequest::REQUESTED;
+	request.ok = false;
+	request.path.clear();
+	request.wanted.store(true);
+
+	if (!request.finished.wait_for(guard, std::chrono::milliseconds(timeout_ms),
+	                               [&request] { return request.state == ScreenshotRequest::DONE; })) {
+		// Not started yet: just cancel. Already writing: the emulation thread
+		// puts the state back when it is done.
+		request.state = (request.state == ScreenshotRequest::REQUESTED)
+		                    ? ScreenshotRequest::IDLE : ScreenshotRequest::ABANDONED;
+		return ScreenshotResult::TIMEOUT;
+	}
+
+	const bool ok = request.ok;
+	path = request.path;
+	request.state = ScreenshotRequest::IDLE;
+	return ok ? ScreenshotResult::OK : ScreenshotResult::FAILED;
 #else
-	return false;
+	(void)path;
+	(void)timeout_ms;
+	return ScreenshotResult::FAILED;
 #endif
 }
 
-std::string CAPTURE_GetLastScreenshotPath() {
-	std::string result = last_screenshot_path;
-	last_screenshot_path.clear();  // Clear after reading so subsequent calls don't return stale path
-	return result;
-}
+void CAPTURE_PollScreenshotRequest() {
+#if (C_SSHOT) && !defined(C_EMSCRIPTEN)
+	if (!screenshot_request.wanted.exchange(false)) return;
 
-void CAPTURE_ClearLastScreenshotPath() {
-	last_screenshot_path.clear();
+	std::lock_guard<std::mutex> guard(screenshot_request.lock);
+	if (screenshot_request.state == ScreenshotRequest::REQUESTED) {
+		screenshot_request.state = ScreenshotRequest::CAPTURING;
+		CaptureState |= CAPTURE_IMAGE;
+	}
+#endif
 }
 
 MixerChannel * MIXER_FirstChannel(void);

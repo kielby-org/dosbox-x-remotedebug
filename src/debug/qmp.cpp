@@ -970,33 +970,22 @@ void QMPServer::handle_screendump(const std::string& cmd) {
 
     std::string file = extract_string(args_str, "file");
 
-    // Clear any previous screenshot path before triggering new capture
-    CAPTURE_ClearLastScreenshotPath();
-
-    // Trigger screenshot capture
-    CAPTURE_TakeScreenshot();
-
-    // Wait for screenshot to complete (poll with timeout)
-    const int timeout_ms = 5000;  // 5 second timeout
-    const int poll_interval_ms = 50;
-    int waited = 0;
-
-    while (CAPTURE_IsScreenshotPending() && waited < timeout_ms) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
-        waited += poll_interval_ms;
-    }
-
-    if (waited >= timeout_ms) {
+    /* The emulation thread takes the screenshot on its next frame; this waits
+     * until it reports that the file is written, not for a flag that only says
+     * the capture has begun. */
+    const int timeout_ms = 5000;
+    std::string screenshot_path;
+    switch (CAPTURE_RequestScreenshot(screenshot_path, timeout_ms)) {
+    case ScreenshotResult::OK:
+        break;
+    case ScreenshotResult::TIMEOUT:
         send_error("GenericError", "Screenshot capture timed out");
         return;
-    }
-
-    // Give a little extra time for the path to be set
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-    // Get the screenshot path
-    std::string screenshot_path = CAPTURE_GetLastScreenshotPath();
-    if (screenshot_path.empty()) {
+    case ScreenshotResult::BUSY:
+        send_error("GenericError", "Another screenshot is still being captured");
+        return;
+    case ScreenshotResult::FAILED:
+    default:
         send_error("GenericError", "Screenshot capture failed - no file created");
         return;
     }
